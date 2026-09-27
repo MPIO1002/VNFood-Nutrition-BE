@@ -3,6 +3,7 @@ const state = {
   previewUrl: null,
   result: null,
   modelReady: false,
+  modelInfo: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -16,6 +17,35 @@ const loadingOverlay = $("#loadingOverlay");
 const resultsSection = $("#resultsSection");
 const SVG_NS = "http://www.w3.org/2000/svg";
 const BOX_COLORS = ["#ff7a45", "#c6e95d", "#5271ff", "#ffca58", "#e66bbb"];
+const READINESS_LABELS = {
+  candidate: "Sẵn sàng đánh giá",
+  development: "Đang phát triển",
+  training_incomplete: "Train chưa hoàn tất",
+  smoke_test: "Chỉ là smoke test",
+  class_mismatch: "Sai class map",
+  unverified: "Chưa xác minh",
+  unknown: "Chưa rõ trạng thái",
+};
+const BASIS_LABELS = {
+  visual_metric_estimate: "Nhìn thấy + có tỷ lệ mét",
+  visual_match: "Model nhìn thấy",
+  catalog_prior: "Công thức mẫu",
+  user_override: "Gram do người dùng sửa",
+};
+const PORTION_METHOD_LABELS = {
+  single_image_serving_prior: "Khẩu phần mặc định từ một ảnh",
+  liquid_or_mixed_dish_prior: "Khẩu phần mặc định cho món nước/hỗn hợp",
+  mask_area_x_thickness_x_density: "Diện tích × độ dày giả định × mật độ",
+  recipe_base_portion_prior: "Khẩu phần chuẩn trong công thức",
+};
+const ANALYSIS_BASIS_LABELS = {
+  visual_components_plus_recipe_catalog: "Thành phần nhìn thấy + công thức mẫu",
+  dish_detection_plus_recipe_catalog: "Tên món nhận diện + công thức mẫu",
+};
+const CALIBRATION_METHOD_LABELS = {
+  detected_plate: "Tự tìm đĩa tròn",
+  manual_scale: "Tỷ lệ cm/px nhập tay",
+};
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -29,6 +59,10 @@ function escapeHtml(value) {
 function number(value, digits = 1) {
   const parsed = Number(value || 0);
   return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: digits }).format(parsed);
+}
+
+function percent(value, digits = 1) {
+  return `${number(Number(value || 0) * 100, digits)}%`;
 }
 
 function setMessage(message = "") {
@@ -53,6 +87,7 @@ async function loadRuntime() {
     if (!infoResponse.ok) throw new Error(info.detail || "Không đọc được metadata model.");
 
     state.modelReady = true;
+    state.modelInfo = info;
     status.className = "runtime-status ready";
     status.querySelector("span:last-child").textContent =
       `${info.detector.model_file} · ${info.detector.class_count} lớp · ${info.detector.backend}`;
@@ -60,24 +95,44 @@ async function loadRuntime() {
     const readiness = info.readiness || {};
     const training = info.detector.training || {};
     const metrics = info.detector.metrics || {};
-    const map50 = metrics["metrics/mAP50(B)"];
-    const details = [
-      training.epochs ? `${training.epochs} epoch` : null,
-      training.fraction ? `${number(training.fraction * 100, 0)}% dữ liệu` : null,
-      map50 !== undefined ? `mAP50 ${number(map50 * 100, 2)}%` : null,
-    ].filter(Boolean).join(" · ");
+    const completedEpochs = training.completed_epochs;
+    const plannedEpochs = training.planned_epochs || training.epochs;
+    const progress = completedEpochs && plannedEpochs
+      ? `${completedEpochs}/${plannedEpochs}`
+      : plannedEpochs || "—";
+    const readinessStatus = readiness.status || "unknown";
+    const readinessLabel = READINESS_LABELS[readinessStatus] || readinessStatus;
+    const subtitle = readinessStatus === "training_incomplete"
+      ? "Có thể thử inference, nhưng chưa coi là model cuối cùng."
+      : readiness.detector_candidate
+        ? "Detector đủ điều kiện để đánh giá sâu hơn; calories vẫn là ước tính."
+        : "Hãy đọc cảnh báo trước khi dùng kết quả.";
 
     banner.hidden = false;
     banner.className = `model-banner ${readiness.detector_candidate ? "ok" : ""}`;
-    banner.innerHTML = `<strong>Model: ${escapeHtml(readiness.status || "unknown")}</strong>` +
-      `<span>${escapeHtml(details || "Chưa có metadata train.")}</span>` +
-      (readiness.warnings || []).map((warning) => `<div>• ${escapeHtml(warning)}</div>`).join("");
+    banner.innerHTML = `
+      <div class="model-summary">
+        <div>
+          <h2>${escapeHtml(info.detector.model_file)} · ${escapeHtml(info.detector.class_count)} lớp</h2>
+          <p>${escapeHtml(subtitle)}</p>
+        </div>
+        <span class="model-status-pill">${escapeHtml(readinessLabel)}</span>
+      </div>
+      <div class="model-metrics">
+        <div class="model-metric"><span>Tiến độ train</span><strong>${escapeHtml(progress)} epoch</strong></div>
+        <div class="model-metric"><span>Dữ liệu train</span><strong>${training.fraction ? percent(training.fraction, 0) : "—"}</strong></div>
+        <div class="model-metric"><span>Precision</span><strong>${metrics["metrics/precision(B)"] !== undefined ? percent(metrics["metrics/precision(B)"], 1) : "—"}</strong></div>
+        <div class="model-metric"><span>Recall</span><strong>${metrics["metrics/recall(B)"] !== undefined ? percent(metrics["metrics/recall(B)"], 1) : "—"}</strong></div>
+        <div class="model-metric"><span>mAP50–95</span><strong>${metrics["metrics/mAP50-95(B)"] !== undefined ? percent(metrics["metrics/mAP50-95(B)"], 1) : "—"}</strong></div>
+      </div>
+      ${(readiness.warnings || []).map((warning) => `<div class="model-warning">• ${escapeHtml(warning)}</div>`).join("")}`;
   } catch (error) {
     state.modelReady = false;
+    state.modelInfo = null;
     status.className = "runtime-status error";
     status.querySelector("span:last-child").textContent = "Model chưa sẵn sàng";
     banner.hidden = false;
-    banner.className = "model-banner";
+    banner.className = "model-banner error";
     banner.innerHTML = `<strong>Không thể khởi tạo model</strong><span>${escapeHtml(error.message)}</span>`;
   }
   updateButton();
@@ -95,15 +150,26 @@ function chooseFile(file) {
     return;
   }
   state.file = file;
+  state.result = null;
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = URL.createObjectURL(file);
-  $("#previewImage").src = state.previewUrl;
+  const previewImage = $("#previewImage");
+  previewImage.onload = () => {
+    const fileMeta = $("#fileMeta");
+    fileMeta.hidden = false;
+    fileMeta.innerHTML = `
+      <span>${escapeHtml(file.type || "image")}</span>
+      <span>${number(file.size / 1024 / 1024, 2)} MB</span>
+      <span>${previewImage.naturalWidth} × ${previewImage.naturalHeight} px</span>`;
+  };
+  previewImage.src = state.previewUrl;
   $("#previewStage").hidden = false;
   $("#previewEmpty").hidden = true;
   $("#overlay").replaceChildren();
   $("#dropTitle").textContent = file.name;
   $("#dropHint").textContent = `${number(file.size / 1024 / 1024, 2)} MB · bấm để đổi ảnh`;
   $("#detectionCount").textContent = "Sẵn sàng phân tích";
+  $("#jsonMessage").textContent = "Dùng khi tích hợp API hoặc kiểm tra calculation trace.";
   resultsSection.hidden = true;
   updateButton();
 }
@@ -125,20 +191,24 @@ dropzone.addEventListener("drop", (event) => chooseFile(event.dataTransfer.files
 
 calibrationMode.addEventListener("change", () => {
   const mode = calibrationMode.value;
+  const help = $("#calibrationHelp");
   calibrationValue.disabled = mode === "none";
   calibrationValue.value = "";
   if (mode === "plate") {
     $("#calibrationLabel").textContent = "Đường kính";
     $("#calibrationUnit").textContent = "cm";
     calibrationValue.placeholder = "25";
+    help.textContent = "Nhập đường kính thật của đĩa. Hệ thống sẽ thử tìm hình tròn để quy đổi pixel sang cm.";
   } else if (mode === "scale") {
     $("#calibrationLabel").textContent = "Tỷ lệ";
     $("#calibrationUnit").textContent = "cm/px";
     calibrationValue.placeholder = "0.042";
+    help.textContent = "Dùng khi bạn đã biết chính xác mỗi pixel tương ứng bao nhiêu cm.";
   } else {
     $("#calibrationLabel").textContent = "Giá trị";
     $("#calibrationUnit").textContent = "—";
     calibrationValue.placeholder = "";
+    help.textContent = "Không hiệu chuẩn: gram dựa chủ yếu vào khẩu phần mẫu, không phải phép đo vật lý từ ảnh.";
   }
 });
 
@@ -252,6 +322,58 @@ function renderQuality(report = {}) {
     </div>`;
 }
 
+function renderDetections(items = []) {
+  const list = $("#detectionList");
+  if (!items.length) {
+    list.innerHTML = `<p class="measurement-note">Không có vùng nào vượt ngưỡng confidence. Hãy thử ảnh rõ hơn, gần hơn hoặc đổi góc chụp.</p>`;
+    return;
+  }
+
+  list.innerHTML = items.map((item) => {
+    const portion = item.portion || {};
+    const range = portion.range_g || [];
+    const portionMethod = PORTION_METHOD_LABELS[portion.method] || portion.method || "Chưa có";
+    const confidence = Number(item.detection_confidence || 0);
+    const relation = item.component_of ? ` · thành phần của ${item.component_of}` : "";
+    const rangeText = range.length === 2
+      ? `${number(range[0])}–${number(range[1])} g`
+      : "chưa có khoảng";
+    return `
+      <div class="detection-row">
+        <div>
+          <strong>${escapeHtml(item.label)}</strong>
+          <small>Lớp ${escapeHtml(item.class_id)}${escapeHtml(relation)} · ${escapeHtml(portionMethod)}</small>
+          <small>Khẩu phần ${number(portion.weight_g)} g · khoảng ${escapeHtml(rangeText)}</small>
+        </div>
+        <span class="confidence ${confidence < 0.5 ? "review" : ""}">${percent(confidence, 0)}</span>
+      </div>`;
+  }).join("");
+}
+
+function renderMeasurement(result) {
+  const calibration = result.calibration;
+  const trace = result.calculation_trace || {};
+  const methods = [...new Set((result.items || [])
+    .map((item) => item.portion?.method)
+    .filter(Boolean))]
+    .map((method) => PORTION_METHOD_LABELS[method] || method)
+    .join(", ") || "Chưa có";
+  const calibrationLabel = calibration
+    ? `${CALIBRATION_METHOD_LABELS[calibration.method] || calibration.method} (${number(calibration.cm_per_pixel, 6)} cm/px)`
+    : "Không có";
+  const metricScale = trace.metric_scale_available ? "Có" : "Không";
+  const depth = trace.depth_measurement_available ? "Có" : "Không — đang giả định";
+
+  $("#measurementPanel").innerHTML = `
+    <div class="measurement-list">
+      <div class="measurement-item"><span>Tỷ lệ kích thước thật</span><strong>${escapeHtml(metricScale)}</strong></div>
+      <div class="measurement-item"><span>Hiệu chuẩn</span><strong>${escapeHtml(calibrationLabel)}</strong></div>
+      <div class="measurement-item"><span>Chiều sâu trực tiếp</span><strong>${escapeHtml(depth)}</strong></div>
+      <div class="measurement-item"><span>Cách tính gram</span><strong>${escapeHtml(methods)}</strong></div>
+    </div>
+    <p class="measurement-note">Gram là ước lượng, không phải số cân đo. Ảnh gần vuông góc từ trên xuống và có vật chuẩn sẽ giảm sai số phối cảnh.</p>`;
+}
+
 function renderFoods(foods) {
   const list = $("#foodList");
   if (!foods.length) {
@@ -262,20 +384,34 @@ function renderFoods(foods) {
 
   list.innerHTML = foods.map((food) => {
     const totals = food.estimated_totals || {};
-    const components = (food.estimated_components || []).map((component) => `
+    const analysisBasis = ANALYSIS_BASIS_LABELS[food.analysis_basis] || food.analysis_basis;
+    const matched = Number(food.visual_components_matched || 0);
+    const matchedInstances = Number(food.visual_instances_matched || 0);
+    const componentCount = (food.estimated_components || []).length;
+    const components = (food.estimated_components || []).map((component) => {
+      const instances = Number(component.visual_instance_count || 0);
+      const instanceText = instances > 0
+        ? `<br><small>${instances} vùng nhìn thấy</small>`
+        : "";
+      return `
       <tr>
-        <td><strong>${escapeHtml(component.name)}</strong><br><span class="basis ${escapeHtml(component.basis)}">${escapeHtml(component.basis)}</span></td>
+        <td><strong>${escapeHtml(component.name)}</strong><br><span class="basis ${escapeHtml(component.basis)}">${escapeHtml(BASIS_LABELS[component.basis] || component.basis)}</span>${instanceText}</td>
         <td><input class="component-grams" type="number" min="1" step="1"
           data-food-id="${escapeHtml(food.food_id)}"
           data-component-id="${escapeHtml(component.ingredient_id)}"
           value="${escapeHtml(component.estimated_g)}" aria-label="Gram của ${escapeHtml(component.name)}"></td>
         <td>${number(component.calories_kcal)} kcal</td>
         <td>${number(component.protein_g)} g</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     return `
       <article class="food-card">
         <header class="food-card-header">
-          <div><h3>${escapeHtml(food.name)}</h3><p>${escapeHtml(food.food_id)} · ${number(food.estimated_portion_g)} g · ${escapeHtml(food.analysis_basis)}</p></div>
+          <div>
+            <h3>${escapeHtml(food.name)}</h3>
+            <p>${escapeHtml(food.food_id)} · ${number(food.estimated_portion_g)} g · ${escapeHtml(analysisBasis)}</p>
+            <p>Model khớp trực tiếp ${matched}/${componentCount} loại thành phần (${matchedInstances} vùng) · chất lượng catalog: ${escapeHtml(food.data_quality || "chưa ghi")}</p>
+          </div>
           <div class="food-total"><strong>${number(totals.calories_kcal)} kcal</strong><span>Tổng ước tính</span></div>
         </header>
         <table class="component-table">
@@ -291,9 +427,11 @@ function renderResult(result) {
   const foods = result.foods || [];
   const totals = aggregateTotals(foods);
   drawBoxes(result);
+  renderDetections(result.items || []);
+  renderMeasurement(result);
   $("#detectionCount").textContent = `${(result.items || []).length} vùng phát hiện`;
   $("#macroGrid").innerHTML = [
-    ["Calories", totals.calories_kcal, "kcal"],
+    ["Calories ước tính", totals.calories_kcal, "kcal"],
     ["Protein", totals.protein_g, "g"],
     ["Chất béo", totals.fat_g, "g"],
     ["Tinh bột", totals.carb_g, "g"],
@@ -309,6 +447,7 @@ function renderResult(result) {
     : "";
   renderFoods(foods);
   $("#jsonOutput").textContent = JSON.stringify(result, null, 2);
+  $("#jsonMessage").textContent = "JSON đã sẵn sàng để sao chép hoặc tải xuống.";
   resultsSection.hidden = false;
   resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -323,6 +462,63 @@ $("#recalculateButton").addEventListener("click", () => {
     overrides[foodId][input.dataset.componentId] = grams;
   });
   analyze(overrides);
+});
+
+$("#newAnalysisButton").addEventListener("click", () => {
+  form.reset();
+  calibrationMode.dispatchEvent(new Event("change"));
+  fileInput.value = "";
+  state.file = null;
+  state.result = null;
+  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+  state.previewUrl = null;
+  $("#previewImage").removeAttribute("src");
+  $("#previewStage").hidden = true;
+  $("#previewEmpty").hidden = false;
+  $("#overlay").replaceChildren();
+  $("#dropTitle").textContent = "Kéo ảnh vào đây hoặc chọn file";
+  $("#dropHint").textContent = "JPG, PNG, WebP · tối đa 15 MB";
+  $("#detectionCount").textContent = "Chưa có ảnh";
+  $("#fileMeta").hidden = true;
+  $("#fileMeta").replaceChildren();
+  resultsSection.hidden = true;
+  setMessage("Đã xóa kết quả cũ. Hãy chọn ảnh mới.");
+  updateButton();
+  $("#workspace").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+$("#copyJsonButton").addEventListener("click", async () => {
+  if (!state.result) return;
+  const json = JSON.stringify(state.result, null, 2);
+  try {
+    await navigator.clipboard.writeText(json);
+    $("#jsonMessage").textContent = "Đã sao chép JSON vào clipboard.";
+  } catch (_error) {
+    const textarea = document.createElement("textarea");
+    textarea.value = json;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+    $("#jsonMessage").textContent = "Đã sao chép JSON bằng chế độ tương thích.";
+  }
+});
+
+$("#downloadJsonButton").addEventListener("click", () => {
+  if (!state.result) return;
+  const blob = new Blob([JSON.stringify(state.result, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = new Date().toISOString().replaceAll(":", "-").replace(".", "-");
+  link.href = url;
+  link.download = `calcucalo-analysis-${timestamp}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  $("#jsonMessage").textContent = "Đã tạo file JSON để tải xuống.";
 });
 
 loadRuntime();

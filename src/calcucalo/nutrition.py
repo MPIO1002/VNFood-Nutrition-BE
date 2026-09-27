@@ -27,6 +27,8 @@ class ComponentEvidence:
     weight_g: float
     confidence: float
     method: str
+    instance_count: int = 1
+    labels: tuple[str, ...] = ()
 
 
 class NutritionCatalog:
@@ -159,6 +161,7 @@ class NutritionCatalog:
         component_estimates: list[dict[str, Any]] = []
         totals = {"calories_kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
         visual_matches = 0
+        visual_instances = 0
         for component in profile["components"]:
             ingredient_id = str(component["ingredient_id"])
             ingredient = self.ingredients[ingredient_id]
@@ -231,6 +234,9 @@ class NutritionCatalog:
             if matched:
                 estimate["visual_label"] = matched.label
                 estimate["visual_confidence"] = round(matched.confidence, 3)
+                estimate["visual_instance_count"] = matched.instance_count
+                estimate["visual_labels"] = list(matched.labels or (matched.label,))
+                visual_instances += matched.instance_count
             component_estimates.append(estimate)
             for nutrient in totals:
                 totals[nutrient] += float(estimate[nutrient])
@@ -256,6 +262,7 @@ class NutritionCatalog:
                 else "dish_detection_plus_recipe_catalog"
             ),
             "visual_components_matched": visual_matches,
+            "visual_instances_matched": visual_instances,
             "user_components_overridden": len(applied_override_keys),
             "unmatched_component_overrides": sorted(
                 set(normalized_overrides) - applied_override_keys

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .analyzer import FoodImageAnalyzer
-from .dataset import prepare_vietfood67
+from .dataset import audit_vietfood67, prepare_vietfood67
 from .detector import create_detector
 from .image_io import load_rgb_image
 from .nutrition import NutritionCatalog
@@ -36,13 +36,13 @@ def run_analyze(args: argparse.Namespace) -> int:
     )
     segmenter = create_segmenter(args.segmenter, sam_model=args.sam_model, device=device)
     component_detector = detector
-    if args.component_model:
+    if args.component_pass:
         component_detector = create_detector(
-            args.component_model,
+            args.component_model or args.model,
             classes_path=args.classes,
-            confidence=args.confidence,
-            iou=args.iou,
-            image_size=args.image_size,
+            confidence=args.component_confidence,
+            iou=args.component_iou,
+            image_size=args.component_image_size,
             device=device,
         )
     estimator = PortionEstimator(args.priors)
@@ -58,6 +58,9 @@ def run_analyze(args: argparse.Namespace) -> int:
         nutrition_catalog=NutritionCatalog(args.catalog),
         component_detector=component_detector,
         enable_component_pass=args.component_pass,
+        component_crop_padding=args.component_crop_padding,
+        component_nms_iou=args.component_nms_iou,
+        component_max_instances=args.component_max_instances,
     )
     result = analyzer.analyze(
         args.image,
@@ -93,9 +96,46 @@ def run_prepare(args: argparse.Namespace) -> int:
     has_errors = any(
         report[metric] > 0
         for report in result["splits"]
-        for metric in ("missing_labels", "invalid_lines", "out_of_range_classes", "out_of_range_coordinates")
+        for metric in (
+            "missing_labels",
+            "invalid_lines",
+            "out_of_range_classes",
+            "out_of_range_coordinates",
+            "invalid_box_sizes",
+            "orphan_labels",
+        )
     )
     return 2 if has_errors else 0
+
+
+def run_audit(args: argparse.Namespace) -> int:
+    result = audit_vietfood67(
+        args.dataset_root,
+        args.classes,
+        small_box_area_threshold=args.small_box_area_threshold,
+        max_images_per_split=args.max_images_per_split,
+    )
+    payload = json.dumps(result, ensure_ascii=False, indent=2)
+    if args.output:
+        output = Path(args.output).expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload, encoding="utf-8")
+        print(f"Audit report: {output}")
+    else:
+        print(payload)
+
+    critical_fields = (
+        "missing_labels",
+        "invalid_lines",
+        "out_of_range_classes",
+        "out_of_range_coordinates",
+        "invalid_box_sizes",
+        "orphan_labels",
+    )
+    has_critical_errors = any(
+        report[field] > 0 for report in result["splits"] for field in critical_fields
+    )
+    return 2 if has_critical_errors else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,10 +152,17 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--catalog", default=str(DEFAULT_CATALOG))
     analyze.add_argument(
         "--component-pass",
-        action="store_true",
-        help="Run a second detector pass inside complex dishes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run a second high-resolution detector pass inside complex dishes (default: on)",
     )
     analyze.add_argument("--component-model", help="Optional component-specific YOLO weights")
+    analyze.add_argument("--component-confidence", type=float, default=0.15)
+    analyze.add_argument("--component-iou", type=float, default=0.50)
+    analyze.add_argument("--component-image-size", type=int, default=960)
+    analyze.add_argument("--component-crop-padding", type=float, default=0.08)
+    analyze.add_argument("--component-nms-iou", type=float, default=0.50)
+    analyze.add_argument("--component-max-instances", type=int, default=12)
     analyze.add_argument(
         "--component-overrides",
         help="JSON file mapping food_id to component grams from user corrections",
@@ -138,6 +185,21 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--classes", default=str(DEFAULT_CLASSES))
     prepare.add_argument("--skip-validation", action="store_true")
     prepare.set_defaults(handler=run_prepare)
+
+    audit = subparsers.add_parser(
+        "audit-dataset",
+        help="Audit class balance, tiny boxes, duplicates and nested dish/component labels",
+    )
+    audit.add_argument("dataset_root")
+    audit.add_argument("--classes", default=str(DEFAULT_CLASSES))
+    audit.add_argument("--small-box-area-threshold", type=float, default=0.01)
+    audit.add_argument(
+        "--max-images-per-split",
+        type=int,
+        help="Optional quick-audit sample limit; omit for complete statistics",
+    )
+    audit.add_argument("--output", help="Optional JSON report path")
+    audit.set_defaults(handler=run_audit)
     return parser
 
 

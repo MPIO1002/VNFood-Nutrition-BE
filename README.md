@@ -165,11 +165,30 @@ calcucalo analyze path\to\meal.jpg `
 ```powershell
 calcucalo analyze path\to\com-tam.jpg `
   --model models\vietfood57_yolov10m.onnx `
-  --component-pass `
   --json-format nutrition
 ```
 
-`--component-pass` crop từng món phức hợp và chạy detector lần hai để tìm thành phần nhỏ ở độ phân giải cao hơn. Có thể truyền checkpoint chuyên biệt bằng `--component-model models\component_detector.pt`; nếu bỏ qua, hệ thống dùng lại dish detector.
+Component pass được bật mặc định. Hệ thống crop từng món phức hợp có thêm vùng đệm, chạy
+detector lần hai ở `imgsz=960`, dùng ngưỡng confidence thấp hơn và NMS theo nguyên liệu để tìm
+thành phần nhỏ. Các miếng rời cùng một nguyên liệu được giữ lại thay vì chỉ lấy một detection;
+khi có tỷ lệ mét, khối lượng các miếng được cộng trước khi tính dinh dưỡng. Dùng
+`--no-component-pass` khi chỉ cần benchmark detector món chính.
+
+Có thể hiệu chỉnh hoặc dùng checkpoint component chuyên biệt:
+
+```powershell
+calcucalo analyze meal.jpg `
+  --model models\best.pt `
+  --component-model models\component_detector.pt `
+  --component-confidence 0.15 `
+  --component-image-size 960 `
+  --component-crop-padding 0.08 `
+  --json-format full
+```
+
+Nếu không truyền `--component-model`, hệ thống dùng lại trọng số dish detector với một detector
+inference cấu hình riêng. Điều này cải thiện khả năng nhìn vật thể nhỏ nhưng không thay thế dữ
+liệu gán nhãn component-level. Thành phần không được nhìn thấy vẫn có `basis=catalog_prior`.
 
 Khi người dùng chỉnh gram trên UI, tạo file như sau và truyền bằng `--component-overrides`:
 
@@ -292,6 +311,16 @@ root/images/train + root/labels/train
 
 `valid` và `validation` được tự động ánh xạ thành `val`.
 
+Audit sâu trước khi train để phát hiện nhãn trùng, box nhỏ, mất cân bằng lớp và
+nhãn món/thành phần lồng nhau:
+
+```powershell
+calcucalo audit-dataset data\raw\vietfood67 `
+  --classes configs\vietfood67_classes.yaml `
+  --max-images-per-split 10000 `
+  --output reports\vietfood67_audit.json
+```
+
 ## Train detection model
 
 Baseline cân bằng tốc độ/VRAM dùng YOLO11n; có thể đổi thành `yolo11s.pt` hoặc `yolo11m.pt` nếu GPU đủ mạnh:
@@ -308,9 +337,35 @@ python scripts/train_detector.py `
 
 Checkpoint tốt nhất nằm tại `runs/detect/vietfood67_yolo11n/weights/best.pt`. Dataset gốc chỉ huấn luyện **detection**. Muốn có model segmentation thuần, cần tạo và kiểm tra polygon ground truth (có thể lấy SAM 2 làm pseudo-label rồi sửa bằng người) trước khi train `yolo11n-seg.pt`.
 
+Checkpoint của một run đã hoàn tất không nên gọi `resume=True`. Để tối ưu thêm
+từ trọng số đã train, dùng một phase mới với `--fine-tune`; `--epochs` khi đó là
+số epoch bổ sung:
+
+```powershell
+python scripts\train_detector.py `
+  --data configs\vietfood67.yaml `
+  --model path\to\v4\weights\best.pt `
+  --epochs 5 `
+  --image-size 640 `
+  --batch 32 `
+  --device 0 `
+  --mosaic 0 `
+  --close-mosaic 0 `
+  --learning-rate 0.001 `
+  --warmup-epochs 1 `
+  --name vietfood67_yolo11n_v5_ft_from_v4_5e `
+  --fine-tune `
+  --test-after-training `
+  --export-onnx
+```
+
+Quy trình Kaggle đầy đủ cho v5 nằm tại [KAGGLE_TRAINING_GUIDE.md](KAGGLE_TRAINING_GUIDE.md#22-từ-v4-lên-v5-fine-tune-thêm-5-epoch).
+
 ## API FastAPI
 
 ### Giao diện web để test model
+
+Hướng dẫn riêng theo từng bước: [WEB_UI_GUIDE.md](WEB_UI_GUIDE.md).
 
 Giao diện upload ảnh được phục vụ trực tiếp bởi FastAPI, không cần cài Node.js. API ưu tiên
 `CALCUCALO_MODEL`; nếu biến này chưa được đặt, hệ thống tự tìm `models/best.onnx`,
@@ -319,8 +374,13 @@ Giao diện upload ảnh được phục vụ trực tiếp bởi FastAPI, khôn
 ```powershell
 $env:CALCUCALO_MODEL = "best.pt" # có thể bỏ nếu best.pt/best.onnx nằm ở vị trí tự dò
 $env:CALCUCALO_SEGMENTER = "grabcut" # hoặc sam
-$env:CALCUCALO_COMPONENT_PASS = "true" # crop và phân tích món phức hợp lần hai
+$env:CALCUCALO_COMPONENT_PASS = "true" # mặc định đã bật
 # $env:CALCUCALO_COMPONENT_MODEL = "models\component_detector.pt"
+$env:CALCUCALO_COMPONENT_CONFIDENCE = "0.15"
+$env:CALCUCALO_COMPONENT_IMAGE_SIZE = "960"
+$env:CALCUCALO_COMPONENT_CROP_PADDING = "0.08"
+$env:CALCUCALO_COMPONENT_NMS_IOU = "0.50"
+$env:CALCUCALO_COMPONENT_MAX_INSTANCES = "12"
 uvicorn calcucalo.api:app --host 0.0.0.0 --port 8000
 ```
 

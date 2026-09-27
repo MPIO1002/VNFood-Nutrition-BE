@@ -17,9 +17,13 @@
           <small>Vision Lab</small>
         </span>
       </a>
-      <div class="runtime-status" id="runtimeStatus" role="status">
-        <span class="status-dot"></span>
-        <span>Đang kiểm tra model...</span>
+      <div class="top-actions">
+        <a href="#howToUse">Cách dùng</a>
+        <a href="/docs" target="_blank" rel="noreferrer">API</a>
+        <div class="runtime-status" id="runtimeStatus" role="status">
+          <span class="status-dot"></span>
+          <span>Đang kiểm tra model...</span>
+        </div>
       </div>
     </header>
 
@@ -34,9 +38,25 @@
           </p>
         </div>
         <div class="hero-facts" aria-label="Thông tin pipeline">
-          <div><strong>68</strong><span>lớp VietFood</span></div>
-          <div><strong>4</strong><span>chỉ số macro</span></div>
-          <div><strong>100%</strong><span>trace phép tính</span></div>
+          <div><strong>68</strong><span>lớp detector</span></div>
+          <div><strong>67</strong><span>công thức món</span></div>
+          <div><strong>4</strong><span>chỉ số dinh dưỡng</span></div>
+        </div>
+      </section>
+
+      <section class="quick-start" id="howToUse" aria-labelledby="quickStartTitle">
+        <div class="quick-start-heading">
+          <p class="eyebrow">THỬ MODEL TRONG 3 BƯỚC</p>
+          <h2 id="quickStartTitle">Biết rõ ảnh đi đâu và kết quả đến từ đâu.</h2>
+        </div>
+        <div class="step-grid">
+          <article><span>1</span><strong>Chọn ảnh rõ</strong><p>Thấy trọn món, đủ sáng, ưu tiên góc gần vuông.</p></article>
+          <article><span>2</span><strong>Thêm vật chuẩn nếu có</strong><p>Đường kính đĩa hoặc cm/pixel giúp ước lượng gram tốt hơn.</p></article>
+          <article><span>3</span><strong>Đọc theo 3 lớp</strong><p>Detection là model thấy; portion là ước lượng; calories đến từ catalog.</p></article>
+        </div>
+        <div class="scope-note">
+          <strong>Điều quan trọng</strong>
+          <span>Model chưa đo chiều sâu thật. Kết quả calories và gram là ước tính phục vụ thử nghiệm, không phải phép đo y tế.</span>
         </div>
       </section>
 
@@ -51,6 +71,12 @@
               <p>Ưu tiên góc gần vuông, đủ sáng và thấy trọn đĩa.</p>
             </div>
           </div>
+
+          <ul class="capture-checklist" aria-label="Checklist chọn ảnh">
+            <li>Chỉ 1–2 món chính trong khung</li>
+            <li>Không rung, không quá tối</li>
+            <li>Không cắt mất mép đĩa hoặc bát</li>
+          </ul>
 
           <label class="dropzone" id="dropzone" for="imageInput">
             <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" />
@@ -84,6 +110,9 @@
               </div>
             </label>
           </div>
+          <p class="calibration-help" id="calibrationHelp">
+            Không có vật chuẩn: hệ thống dùng khẩu phần mặc định và trả cảnh báo.
+          </p>
 
           <button class="analyze-button" id="analyzeButton" type="submit" disabled>
             <span>Phân tích món ăn</span>
@@ -100,6 +129,7 @@
             </div>
             <span class="detection-count" id="detectionCount">Chưa phân tích</span>
           </div>
+          <div class="file-meta" id="fileMeta" hidden></div>
           <div class="preview-canvas" id="previewCanvas">
             <div class="preview-empty" id="previewEmpty">
               <span class="plate-illustration" aria-hidden="true"></span>
@@ -128,10 +158,31 @@
             <p class="eyebrow">KẾT QUẢ PHÂN TÍCH</p>
             <h2>Dinh dưỡng ước tính</h2>
           </div>
-          <span id="qualityBadge" class="quality-badge"></span>
+          <div class="result-title-actions">
+            <span id="qualityBadge" class="quality-badge"></span>
+            <button type="button" class="secondary-button" id="newAnalysisButton">Ảnh khác</button>
+          </div>
         </div>
 
         <div class="macro-grid" id="macroGrid"></div>
+
+        <div class="result-explainer" aria-label="Cách đọc kết quả">
+          <article><span class="result-layer visual">1</span><div><strong>Model nhìn thấy</strong><p>Nhãn, bounding box và confidence từ detector.</p></div></article>
+          <article><span class="result-layer estimate">2</span><div><strong>Hệ thống ước lượng</strong><p>Gram từ hình học hoặc khẩu phần mặc định.</p></div></article>
+          <article><span class="result-layer catalog">3</span><div><strong>Catalog tính toán</strong><p>Calories và macro theo công thức trên 100 g.</p></div></article>
+        </div>
+
+        <div class="result-detail-grid">
+          <section class="detail-panel" aria-labelledby="detectionTitle">
+            <div class="detail-heading"><span>MODEL</span><h3 id="detectionTitle">Các vùng phát hiện</h3></div>
+            <div class="detection-list" id="detectionList"></div>
+          </section>
+          <section class="detail-panel" aria-labelledby="measurementTitle">
+            <div class="detail-heading"><span>PORTION</span><h3 id="measurementTitle">Cơ sở ước lượng</h3></div>
+            <div id="measurementPanel"></div>
+          </section>
+        </div>
+
         <div class="quality-panel" id="qualityPanel"></div>
         <div class="warning-panel" id="warningPanel" hidden></div>
         <div class="food-list" id="foodList"></div>
@@ -145,7 +196,14 @@
         </div>
 
         <details class="json-panel">
-          <summary>Xem JSON đầy đủ</summary>
+          <summary>Xem JSON kỹ thuật đầy đủ</summary>
+          <div class="json-actions">
+            <span id="jsonMessage" role="status">Dùng khi tích hợp API hoặc kiểm tra calculation trace.</span>
+            <div>
+              <button type="button" id="copyJsonButton">Sao chép JSON</button>
+              <button type="button" id="downloadJsonButton">Tải JSON</button>
+            </div>
+          </div>
           <pre id="jsonOutput"></pre>
         </details>
       </section>

@@ -103,7 +103,7 @@ print("Ultralytics:", ultralytics.__version__)
 Kết quả mong đợi có dạng:
 
 ```text
-CalcuCalo: 0.3.0
+CalcuCalo: 0.4.0
 Ultralytics: 8.x.x
 ```
 
@@ -391,7 +391,148 @@ Nhấn vào đường dẫn được hiển thị để tải ZIP về máy. Sau
 
 Nếu bấm Run từng cell, hãy tải ZIP về máy ngay sau Cell 13. Không chờ đến lúc session timeout và không coi `Files only` là bản backup duy nhất.
 
-## 17. Tiếp tục một run bị gián đoạn
+## 17. Khi GitHub có version code mới
+
+Phần này áp dụng khi notebook Kaggle đã từng chạy một version cũ, sau đó source code trên GitHub được cập nhật. Cập nhật code và train model là hai việc khác nhau: **code mới không phải lúc nào cũng yêu cầu train lại**.
+
+### 17.1. Quyết định trước khi chạy
+
+| Loại thay đổi | Có cần train lại? | Cách xử lý |
+|---|---|---|
+| Web UI, API, JSON, logging, model readiness | Không | Pull code mới và tiếp tục dùng `best.pt` hiện có |
+| Sửa công cụ export hoặc đóng gói | Không | Pull code, cài lại package rồi export/đóng gói lại |
+| Đổi epoch nhưng giữ nguyên model, dữ liệu và augmentation | Không nhất thiết | Có thể resume `last.pt` |
+| Đổi augmentation như `mosaic`, image size, class map hoặc dataset | Có | Tạo run mới từ pretrained checkpoint để so sánh rõ ràng |
+| Đổi YOLO11n sang YOLO11s hoặc thay kiến trúc | Có | Train run mới, không resume checkpoint kiến trúc cũ |
+
+Đối với nâng cấp hiện tại từ detector v3 sang thí nghiệm v4, thay đổi chính là `mosaic=0.0`. Vì vậy giữ model v3 làm baseline và **train model v4 mới**, không resume `last.pt` của v3.
+
+### 17.2. Thứ tự lệnh trong session Kaggle đang còn hoạt động
+
+Trước tiên phải bảo đảm checkpoint cũ đã được tải về máy hoặc lưu trong Kaggle Output. Sau đó chạy lần lượt:
+
+#### Bước 1 — Kiểm tra source và kéo code mới
+
+```python
+%cd /kaggle/working/CalcuCalo
+
+!git status --short
+!git pull --ff-only
+!git log -1 --oneline
+```
+
+Nếu `git pull --ff-only` báo có thay đổi local, không dùng `git reset --hard`. Hãy tải các file cần giữ trước, sau đó dùng một thư mục clone mới hoặc xử lý riêng các thay đổi local.
+
+#### Bước 2 — Cài lại package từ source mới
+
+Phải chạy lại bước này vì `pyproject.toml`, dependency hoặc entry point có thể đã thay đổi:
+
+```python
+import sys
+
+!{sys.executable} -m pip install -q \
+  -e "/kaggle/working/CalcuCalo[inference]" \
+  onnx \
+  onnxslim
+```
+
+#### Bước 3 — Kiểm tra đúng version mới
+
+```python
+import sys
+
+SRC_PATH = "/kaggle/working/CalcuCalo/src"
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
+
+import calcucalo
+import ultralytics
+
+print("CalcuCalo:", calcucalo.__version__)
+print("Ultralytics:", ultralytics.__version__)
+```
+
+Nếu `calcucalo` đã được import từ trước và vẫn hiển thị version cũ, kiểm tra bằng một Python process mới:
+
+```python
+!{sys.executable} -c "import calcucalo; print(calcucalo.__version__)"
+```
+
+Không cần Factory Reset chỉ để cập nhật source code.
+
+#### Bước 4 — Kiểm tra các biến và file còn tồn tại
+
+```python
+from pathlib import Path
+
+print("DATASET_ROOT:", globals().get("DATASET_ROOT"))
+print("DEVICE:", globals().get("DEVICE"))
+print("YAML tồn tại:", Path("/kaggle/working/vietfood67.yaml").is_file())
+```
+
+Nếu `DEVICE`, `DATASET_ROOT` hoặc YAML bị thiếu thì chỉ chạy lại Cell 1, Cell 5 và Cell 6 tương ứng. Nếu chúng vẫn hợp lệ thì không cần tạo lại.
+
+#### Bước 5 — Train một run v4 mới
+
+Mười epoch đủ cho vòng so sánh nhanh đầu tiên. Đặt tên run mới để không ghi đè v3:
+
+```python
+RUN_NAME = "vietfood67_yolo11n_v4_no_mosaic_10e"
+```
+
+```python
+import sys
+
+!{sys.executable} scripts/train_detector.py \
+  --data "/kaggle/working/vietfood67.yaml" \
+  --model "yolo11n.pt" \
+  --epochs 10 \
+  --image-size 640 \
+  --batch 32 \
+  --device {DEVICE} \
+  --workers 4 \
+  --patience 10 \
+  --mosaic 0.0 \
+  --close-mosaic 0 \
+  --save-period 1 \
+  --project "/kaggle/working/runs/detect" \
+  --name {RUN_NAME}
+```
+
+Sau khi train, tiếp tục chạy Cell 9 đến Cell 13 để kiểm tra metric, export ONNX, thử suy luận, đóng gói và tải artifact.
+
+### 17.3. Những cell không cần chạy lại
+
+Trong cùng một session, khi dataset và các biến vẫn còn hợp lệ, không cần:
+
+- Add Input lại cho VietFood67.
+- Tải hoặc chép lại dataset vào `/kaggle/working`.
+- Chạy lại smoke test Cell 7 nếu pipeline đã từng chạy thành công.
+- Tạo lại `vietfood67.yaml` nếu file vẫn tồn tại và đường dẫn dataset không đổi.
+- Resume `last.pt` của v3 khi mục tiêu là thí nghiệm v4 với augmentation mới.
+- Export lại ONNX của model v3 nếu file `best.onnx` cũ đã được lưu an toàn.
+- Xóa folder run v3 hoặc dùng lại cùng `RUN_NAME`.
+- Restart, Factory Reset, đổi Accelerator hoặc đổi Environment.
+
+Nếu dùng **Save & Run All**, Kaggle chạy trong session sạch nên vẫn phải để Cell 1 đến Cell 6 trong notebook. Có thể bỏ Cell 7; thay Cell 8 cũ bằng lệnh train v4 và giữ Cell 9 đến Cell 12.
+
+### 17.4. Khi nào mới dùng resume
+
+Chỉ resume khi muốn tiếp tục **đúng cùng một experiment** và vẫn giữ nguyên model, dataset, class map, image size cùng augmentation:
+
+```python
+from pathlib import Path
+
+RUN_NAME = "vietfood67_yolo11n_v1"
+LAST_PT = Path("/kaggle/working/runs/detect") / RUN_NAME / "weights" / "last.pt"
+assert LAST_PT.is_file(), f"Không tìm thấy {LAST_PT}"
+
+!yolo detect train resume model={LAST_PT}
+```
+
+Không dùng resume để biến run v3 có mosaic thành v4 không mosaic, vì checkpoint sẽ tiếp tục trạng thái optimizer và cấu hình experiment cũ.
+
+## 18. Tiếp tục một run bị gián đoạn
 
 Chỉ có thể resume nếu `last.pt` vẫn còn và chứa trạng thái training phù hợp:
 
@@ -406,7 +547,7 @@ assert LAST_PT.is_file(), f"Không tìm thấy {LAST_PT}"
 
 Nếu toàn bộ `/kaggle/working` đã mất và không có Saved Version, Kaggle Dataset hoặc file đã tải về thì không thể resume.
 
-## 18. Xử lý lỗi thường gặp
+## 19. Xử lý lỗi thường gặp
 
 ### `ModuleNotFoundError: No module named 'calcucalo'`
 
@@ -444,7 +585,7 @@ Persistence có thể thất bại khi session crash hoặc bị thu hồi. Khô
 
 Nếu không có cả ba nguồn thì checkpoint không thể khôi phục và phải train lại.
 
-## 19. Checklist hoàn thành
+## 20. Checklist hoàn thành
 
 - [ ] CUDA hoạt động và số GPU đúng.
 - [ ] Source code đã clone/cập nhật.
@@ -459,7 +600,7 @@ Nếu không có cả ba nguồn thì checkpoint không thể khôi phục và p
 - [ ] Tạo file ZIP artifact.
 - [ ] Đã tải ZIP về máy hoặc xác nhận Output của Saved Version.
 
-## 20. Các file quan trọng cần giữ
+## 21. Các file quan trọng cần giữ
 
 Tối thiểu phải giữ:
 
@@ -475,6 +616,257 @@ args.yaml
 ```
 
 `best.pt` là checkpoint ưu tiên dùng cho suy luận. `last.pt` chủ yếu dùng để resume khi trạng thái optimizer còn được giữ. `best.onnx` dùng cho ONNX Runtime hoặc triển khai ngoài Ultralytics.
+
+## 22. Từ v4 lên v5: fine-tune thêm 5 epoch
+
+Phần này áp dụng khi v4 đã train đủ 10/10 epoch với `mosaic=0.0`. Đây là một
+phase fine-tune mới từ trọng số v4, không phải exact-resume.
+
+### 22.1. Tại sao không dùng `resume=True`?
+
+Sau khi run hoàn tất, Ultralytics thường strip optimizer và đặt metadata epoch của
+checkpoint về trạng thái hoàn tất. `resume=True` khi đó có thể báo training đã xong.
+
+V5 dùng:
+
+```text
+v4 best.pt → optimizer mới, learning rate thấp → 5 epoch bổ sung → v5 best.pt
+```
+
+Epoch trong folder v5 sẽ được đánh số 1–5. Có thể hiểu đây là giai đoạn tối ưu bổ
+sung tương ứng sau 10 epoch v4, nhưng không phải sự tiếp nối chính xác optimizer.
+
+### 22.2. Pull source v5 và cài lại package
+
+Trong clone hiện có:
+
+```python
+%cd /kaggle/working/CalcuCalo
+!git pull --ff-only
+```
+
+Nếu thư mục clone không còn:
+
+```python
+!git clone https://github.com/TheMinh04/CalculateCaloFromFood.git /kaggle/working/CalcuCalo
+%cd /kaggle/working/CalcuCalo
+```
+
+Cài source mới:
+
+```python
+import sys
+
+!{sys.executable} -m pip install -q \
+  -e "/kaggle/working/CalcuCalo[inference]" \
+  onnx \
+  onnxslim
+
+!{sys.executable} -c "import calcucalo; print('CalcuCalo:', calcucalo.__version__)"
+```
+
+Kết quả mong đợi là `CalcuCalo: 0.5.0`.
+
+### 22.3. Khôi phục checkpoint v4
+
+Pull Git không tải checkpoint vì file trọng số không được lưu trong repository.
+`best.pt` của v4 phải còn trong `/kaggle/working`, được gắn từ Saved Version/Kaggle
+Dataset, hoặc được upload lại.
+
+Tìm checkpoint:
+
+```python
+from pathlib import Path
+
+v4_candidates = [
+    path
+    for base in (Path("/kaggle/working"), Path("/kaggle/input"))
+    for path in base.rglob("best.pt")
+    if "v4" in path.as_posix().lower() or "no_mosaic_10e" in path.as_posix().lower()
+]
+
+print("Các checkpoint v4 tìm thấy:")
+for path in v4_candidates:
+    print(path)
+
+assert v4_candidates, "Không tìm thấy v4 best.pt; hãy Add Input hoặc upload artifact v4"
+V4_BEST = v4_candidates[0]
+print("Sử dụng:", V4_BEST)
+```
+
+Nếu có nhiều kết quả, đặt `V4_BEST` thủ công thành đúng file bạn muốn dùng.
+
+### 22.4. Audit dataset trước khi train
+
+Cell này chỉ đọc dataset và tạo báo cáo; không sửa dữ liệu Kaggle Input:
+
+```python
+AUDIT_JSON = "/kaggle/working/vietfood67_audit_v5.json"
+
+!{sys.executable} -m calcucalo.cli audit-dataset \
+  "{DATASET_ROOT}" \
+  --classes "/kaggle/working/CalcuCalo/configs/vietfood67_classes.yaml" \
+  --small-box-area-threshold 0.01 \
+  --max-images-per-split 10000 \
+  --output "{AUDIT_JSON}"
+```
+
+Xem tóm tắt:
+
+```python
+import json
+
+with open(AUDIT_JSON, encoding="utf-8") as stream:
+    audit = json.load(stream)
+
+print("Cảnh báo:")
+for warning in audit["warnings"]:
+    print("-", warning)
+
+weak_small_classes = sorted(
+    (item for item in audit["class_summary"] if item["instances"]),
+    key=lambda item: item["small_box_fraction"] or 0,
+    reverse=True,
+)[:10]
+print("10 lớp có tỷ lệ box nhỏ cao nhất:")
+for item in weak_small_classes:
+    print(item)
+```
+
+Giới hạn trên tạo quick audit tối đa 10.000 ảnh mỗi split để notebook không phải
+đọc toàn bộ hàng trăm nghìn label. Bỏ `--max-images-per-split` khi cần thống kê
+dataset chính thức. Duplicate hoặc nhãn lồng nhau không được xóa tự động; hãy lưu
+báo cáo để tạo một version dataset đã sửa riêng sau này.
+
+### 22.5. Fine-tune v5 từ v4 ở cùng `imgsz=640`
+
+Đây là cấu hình khuyên dùng để nối thêm 5 epoch mà không đồng thời thay đổi độ
+phân giải. Learning rate được hạ để tránh làm hỏng trọng số tốt của v4.
+
+```python
+RUN_NAME = "vietfood67_yolo11n_v5_ft_from_v4_5e"
+```
+
+```python
+%cd /kaggle/working/CalcuCalo
+
+!{sys.executable} scripts/train_detector.py \
+  --data "/kaggle/working/vietfood67.yaml" \
+  --model "{V4_BEST}" \
+  --epochs 5 \
+  --image-size 640 \
+  --batch 32 \
+  --device {DEVICE} \
+  --workers 4 \
+  --patience 5 \
+  --mosaic 0.0 \
+  --close-mosaic 0 \
+  --multi-scale 0.0 \
+  --learning-rate 0.001 \
+  --final-learning-rate-factor 0.1 \
+  --warmup-epochs 1 \
+  --save-period 1 \
+  --project "/kaggle/working/runs/detect" \
+  --name "{RUN_NAME}" \
+  --fine-tune \
+  --test-after-training \
+  --test-project "/kaggle/working/runs/val" \
+  --test-name "v5_ft_from_v4_test" \
+  --export-onnx
+```
+
+Script sẽ:
+
+1. Kiểm tra checkpoint và YAML đều có 68 lớp.
+2. Fine-tune thêm 5 epoch trong một run mới.
+3. Chọn `best.pt` của phase v5.
+4. Đánh giá model đó trên `split=test` bằng GPU đầu tiên.
+5. Lưu `test_metrics.json` trong folder train v5.
+6. Export ONNX.
+
+Không thêm `--exist-ok` trừ khi cố ý ghi tiếp vào đúng folder. Dùng tên run mới
+giúp tránh ghi đè kết quả cũ khi phải chạy lại.
+
+### 22.6. Experiment riêng cho vật thể nhỏ
+
+Không thay cấu hình chính ở trên nếu muốn so sánh công bằng. Sau đó có thể chạy
+một experiment riêng với độ phân giải lớn hơn:
+
+```python
+RUN_NAME_SMALL = "vietfood67_yolo11n_v5_small_768_5e"
+
+!{sys.executable} scripts/train_detector.py \
+  --data "/kaggle/working/vietfood67.yaml" \
+  --model "{V4_BEST}" \
+  --epochs 5 \
+  --image-size 768 \
+  --batch 16 \
+  --device {DEVICE} \
+  --workers 4 \
+  --patience 5 \
+  --mosaic 0.0 \
+  --close-mosaic 0 \
+  --learning-rate 0.001 \
+  --final-learning-rate-factor 0.1 \
+  --warmup-epochs 1 \
+  --save-period 1 \
+  --project "/kaggle/working/runs/detect" \
+  --name "{RUN_NAME_SMALL}" \
+  --fine-tune
+```
+
+Nếu hết VRAM, giảm `batch` từ 16 xuống 8. Chỉ giữ experiment 768 nếu AP/recall
+của các lớp vật thể nhỏ tăng trên validation/test và ảnh thực tế.
+
+### 22.7. Các bước không cần chạy lại
+
+Trong cùng session và khi các file vẫn còn, không cần:
+
+- Train lại v4 từ `yolo11n.pt`.
+- Chạy `resume=True` trên checkpoint v4 đã hoàn tất.
+- Add Input VietFood67 lần nữa.
+- Tạo lại YAML nếu `/kaggle/working/vietfood67.yaml` còn tồn tại.
+- Dùng lại tên folder v4.
+- Export ONNX v4 nếu mục tiêu là đánh giá v5.
+
+Sau khi hoàn tất, tải về tối thiểu folder train v5, folder test v5,
+`vietfood67_audit_v5.json`, `best.pt` và `best.onnx`.
+
+### 22.8. Kiểm tra bóc tách thành phần sau khi train
+
+V5 bật component pass mặc định. Dish detector nhận diện món trước, sau đó crop món phức hợp
+và chạy lượt thứ hai ở `imgsz=960`, confidence `0.15`. Ví dụ với một ảnh cơm tấm đã đưa vào
+Kaggle Input:
+
+```python
+from pathlib import Path
+
+V5_BEST = Path("/kaggle/working/runs/detect") / RUN_NAME / "weights/best.pt"
+TEST_IMAGE = "/kaggle/input/your-test-images/com-tam.jpg"
+
+!{sys.executable} -m calcucalo.cli analyze "{TEST_IMAGE}" \
+  --model "{V5_BEST}" \
+  --segmenter grabcut \
+  --component-confidence 0.15 \
+  --component-image-size 960 \
+  --component-crop-padding 0.08 \
+  --json-format full \
+  --output-json "/kaggle/working/v5_component_result.json" \
+  --output-image "/kaggle/working/v5_component_overlay.jpg"
+```
+
+Trong JSON, kiểm tra:
+
+- `visual_components_matched`: số loại nguyên liệu model nhìn thấy;
+- `visual_instances_matched`: tổng số vùng thành phần được giữ sau NMS;
+- `estimated_components[].visual_instance_count`: số miếng/vùng của từng nguyên liệu;
+- `basis=visual_metric_estimate`: chỉ xuất hiện khi có tỷ lệ mét;
+- `basis=visual_match`: nhìn thấy thành phần nhưng gram vẫn theo recipe prior;
+- `basis=catalog_prior`: thành phần chỉ được suy ra từ công thức.
+
+Không dùng riêng mAP của VietFood67 để kết luận calories chính xác. Dataset này chưa có ground
+truth mask và gram cho từng thành phần. Muốn đo chất lượng bóc tách thật sự phải tạo test set
+component-level gồm box/mask, cân gram từng thành phần và tổng calories tham chiếu.
 
 ## Tham khảo Kaggle
 

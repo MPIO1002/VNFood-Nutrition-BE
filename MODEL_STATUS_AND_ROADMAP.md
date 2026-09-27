@@ -1,14 +1,15 @@
 # Báo cáo trạng thái model CalcuCalo Vision
 
-Phiên bản mới nhất: **0.4.0**
+Phiên bản mới nhất: **0.5.0**
 
-Ngày cập nhật báo cáo gần nhất: **26/09/2026**
+Ngày cập nhật báo cáo gần nhất: **27/09/2026**
 
 ## Danh sách phiên bản
 
 | Phiên bản | Ngày báo cáo | Trạng thái | Nội dung nổi bật |
 |---|---|---|---|
-| [0.4.0](#phiên-bản-040--hiện-tại) | 26/09/2026 | Hiện tại | Web UI, kiểm tra ảnh, readiness theo tiến độ train và cấu hình thí nghiệm detector |
+| [0.5.0](#phiên-bản-050--hiện-tại) | 27/09/2026 | Hiện tại | Component pass độ phân giải cao, multi-instance, audit nhãn, fine-tune an toàn và test tự động |
+| [0.4.0](#phiên-bản-040--lưu-trữ) | 26/09/2026 | Lưu trữ | Web UI, kiểm tra ảnh, readiness theo tiến độ train và cấu hình thí nghiệm detector |
 | [0.3.0](#phiên-bản-030--lưu-trữ) | 26/09/2026 | Lưu trữ + hậu kiểm | Calculation trace và checkpoint VietFood67 15/20 epoch |
 | [0.2.0](#phiên-bản-020--lưu-trữ) | 21/09/2026 | Lưu trữ | Baseline end-to-end đầu tiên cho detection, portion và nutrition |
 
@@ -16,7 +17,90 @@ Quy ước cập nhật: phiên bản mới luôn được thêm lên trên; n�
 
 ---
 
-## Phiên bản 0.4.0 — hiện tại
+## Phiên bản 0.5.0 — hiện tại
+
+Ngày cập nhật: 27/09/2026<br>
+Phiên bản mã nguồn: 0.5.0
+
+### 1. Đầu vào của v5
+
+Run `vietfood67_yolo11n_v4_no_mosaic_10e` đã hoàn thành đủ 10/10 epoch trên
+100% dữ liệu, đúng 68 lớp và không dùng mosaic. Validation cuối đạt precision
+**0,7573**, recall **0,6820**, mAP50 **0,7504** và mAP50–95 **0,6023**.
+
+So với v3 tại cùng epoch 10, v4 tăng lần lượt khoảng 1,10; 3,40; 2,86 và
+3,40 điểm phần trăm. Tuy nhiên v4 epoch 10 vẫn chưa vượt v3 epoch 15. Các đường
+validation loss vẫn giảm và mAP vẫn tăng ở epoch cuối, nên có cơ sở chạy thêm một
+phase fine-tune ngắn 5 epoch.
+
+### 2. Thay đổi trong code v5
+
+- Thêm `calcucalo audit-dataset` để thống kê class balance, box nhỏ, nhãn trùng,
+  label không có ảnh, box lỗi và các cặp nhãn khác lớp lồng nhau.
+- Mở rộng `scripts/train_detector.py` với `--fine-tune`. Chế độ này tải trọng số
+  đã học nhưng tạo optimizer/schedule mới với learning rate bảo thủ.
+- Chặn nhầm lẫn giữa `--resume` và checkpoint đã train xong. Checkpoint v4 đã
+  hoàn tất 10/10 và bị Ultralytics strip optimizer, vì vậy không thể exact-resume.
+- Kiểm tra số lớp của checkpoint và YAML trước khi fine-tune/resume để tránh lệch
+  class map.
+- Thêm cấu hình learning rate, warmup, multi-scale và `exist_ok` trên CLI.
+- Thêm `--test-after-training`: tự đánh giá `best.pt` trên `split=test`, lưu plot
+  và `test_metrics.json`.
+- Giữ `--export-onnx` để export model được chọn sau phase mới.
+- Bật component pass mặc định cho CLI/API; có thể tắt rõ ràng bằng `--no-component-pass`.
+- Tách cấu hình component detector khỏi dish detector: mặc định `confidence=0.15`, `imgsz=960`
+  và crop có vùng đệm 8% để tăng khả năng giữ thành phần nhỏ ở sát mép món.
+- Thêm NMS theo ingredient thay vì chỉ giữ một detection tốt nhất. Nhiều miếng rời của cùng
+  nguyên liệu được giữ và `visual_instance_count` được xuất trong full JSON.
+- Khi ảnh có tỷ lệ mét và có nhiều instance cùng nguyên liệu, cộng khối lượng hình học của các
+  instance trước khi tính calories/macro. Khi không có tỷ lệ mét, vẫn dùng gram theo recipe prior
+  và chỉ coi detection là bằng chứng thị giác, không giả vờ đã đo được gram.
+- API model info trả cả cấu hình component detector để dễ kiểm tra model đang chạy thực tế.
+
+### 3. Cách hiểu “epoch 10 đến 15”
+
+V4 là run đã hoàn tất và checkpoint không còn optimizer state. Vì vậy v5 không
+thể tiếp tục chính xác optimizer ở epoch 11 bằng `resume=True`. Cách an toàn là:
+
+1. Dùng `v4/weights/best.pt` làm trọng số khởi tạo.
+2. Chạy `--fine-tune --epochs 5` với learning rate thấp hơn.
+3. Run v5 sẽ hiển thị epoch 1–5, nhưng về ý nghĩa đây là 5 epoch tối ưu bổ sung
+   sau 10 epoch của v4.
+
+Không được dùng lại tên run v4 hoặc ghi đè folder v4. Cần giữ cả hai để so sánh.
+
+### 4. Mục tiêu của v5
+
+| Điểm yếu v4 | Xử lý trong v5 |
+|---|---|
+| Không biết nhãn nào trùng/box nhỏ | Sinh báo cáo audit JSON trước train |
+| Dễ dùng nhầm `resume` với run hoàn tất | Tách chế độ `--fine-tune`, chặn checkpoint hoàn tất |
+| Có thể lệch class map khi đổi checkpoint | So sánh số lớp model với YAML trước train |
+| Vật thể nhỏ còn bị bỏ sót | Audit theo class; hỗ trợ thử `imgsz=768` ở experiment riêng |
+| Component pass chỉ giữ một box mỗi nguyên liệu | NMS theo ingredient và giữ nhiều instance rời |
+| Thành phần nhỏ dùng cùng ngưỡng/độ phân giải với món chính | Component detector riêng, mặc định conf 0,15 và imgsz 960 |
+| Crop món sát bounding box dễ cắt topping ở mép | Thêm padding cấu hình được, mặc định 8% |
+| Dễ hiểu nhầm detection thành gram đã đo | Chỉ cộng gram instance khi có metric scale; nếu không vẫn ghi recipe prior |
+| Chỉ nhìn validation rồi kết luận | Tự chạy test split và lưu metric machine-readable |
+| Khó tái lập phase fine-tune | Ghi rõ lr0, lrf, warmup, seed và tên run mới |
+
+V5 chưa tự sửa nhãn sai trong dataset. Audit chỉ chỉ ra vị trí/vấn đề tổng hợp;
+việc sửa label cần được thực hiện trong một version dataset mới để không âm thầm
+thay đổi dữ liệu gốc.
+
+### 5. Tiêu chí chọn model sau v5
+
+- So sánh v3, v4 và v5 trên cùng test split, cùng `imgsz=640`.
+- Ưu tiên mAP50–95 và recall, đồng thời xem AP từng lớp và ảnh dự đoán.
+- Nếu v5 không tăng hoặc bắt đầu tăng validation loss, giữ `best.pt` của v4/v3.
+- Sau khi chọn detector, vẫn phải đánh giá ảnh điện thoại, sai số gram và calories;
+  detector candidate không đồng nghĩa toàn pipeline production-ready.
+
+Chi tiết cell Kaggle nằm trong chương **22** của `KAGGLE_TRAINING_GUIDE.md`.
+
+---
+
+## Phiên bản 0.4.0 — lưu trữ
 
 Ngày cập nhật: 26/09/2026<br>
 Phiên bản mã nguồn: 0.4.0

@@ -20,7 +20,7 @@ from .segmenter import create_segmenter
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 EXPECTED_CLASS_COUNT = 68
-app = FastAPI(title="CalcuCalo Vision API", version="0.4.0")
+app = FastAPI(title="CalcuCalo Vision API", version="0.5.0")
 app.mount("/assets", StaticFiles(directory=WEB_ROOT / "assets"), name="assets")
 
 
@@ -159,15 +159,20 @@ def get_analyzer() -> FoodImageAnalyzer:
         image_size=_env_int("CALCUCALO_IMAGE_SIZE", 640, 160, 2048),
         device=device,
     )
+    component_pass = os.getenv("CALCUCALO_COMPONENT_PASS", "true").casefold() in {
+        "1",
+        "true",
+        "yes",
+    }
     component_detector = detector
     component_model = os.getenv("CALCUCALO_COMPONENT_MODEL")
-    if component_model:
+    if component_pass:
         component_detector = create_detector(
-            component_model,
+            component_model or model_path,
             classes_path=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml",
-            confidence=_env_float("CALCUCALO_CONFIDENCE", 0.25, 0.01, 1.0),
-            iou=_env_float("CALCUCALO_IOU", 0.60, 0.01, 1.0),
-            image_size=_env_int("CALCUCALO_IMAGE_SIZE", 640, 160, 2048),
+            confidence=_env_float("CALCUCALO_COMPONENT_CONFIDENCE", 0.15, 0.01, 1.0),
+            iou=_env_float("CALCUCALO_COMPONENT_IOU", 0.50, 0.01, 1.0),
+            image_size=_env_int("CALCUCALO_COMPONENT_IMAGE_SIZE", 960, 160, 2048),
             device=device,
         )
     segmenter = create_segmenter(segmenter_name, sam_model=sam_model, device=device)
@@ -181,8 +186,14 @@ def get_analyzer() -> FoodImageAnalyzer:
         PortionEstimator(priors),
         nutrition_catalog=NutritionCatalog(catalog),
         component_detector=component_detector,
-        enable_component_pass=os.getenv("CALCUCALO_COMPONENT_PASS", "false").casefold()
-        in {"1", "true", "yes"},
+        enable_component_pass=component_pass,
+        component_crop_padding=_env_float(
+            "CALCUCALO_COMPONENT_CROP_PADDING", 0.08, 0.0, 0.50
+        ),
+        component_nms_iou=_env_float("CALCUCALO_COMPONENT_NMS_IOU", 0.50, 0.01, 1.0),
+        component_max_instances=_env_int(
+            "CALCUCALO_COMPONENT_MAX_INSTANCES", 12, 1, 100
+        ),
     )
 
 
@@ -215,6 +226,11 @@ def model_info() -> dict[str, object]:
         if hasattr(analyzer.detector, "info")
         else {"backend": type(analyzer.detector).__name__}
     )
+    component_detector_info = (
+        analyzer.component_detector.info()
+        if hasattr(analyzer.component_detector, "info")
+        else {"backend": type(analyzer.component_detector).__name__}
+    )
     model_path, source = _model_path()
     return {
         "api_version": app.version,
@@ -225,6 +241,10 @@ def model_info() -> dict[str, object]:
         "pipeline": {
             "segmenter": type(analyzer.segmenter).__name__,
             "component_pass": analyzer.enable_component_pass,
+            "component_detector": component_detector_info,
+            "component_crop_padding": analyzer.component_crop_padding,
+            "component_nms_iou": analyzer.component_nms_iou,
+            "component_max_instances": analyzer.component_max_instances,
             "nutrition_catalog": analyzer.nutrition_catalog is not None,
             "portion_estimation": "metric_geometry_or_catalog_prior",
             "depth_measurement": False,

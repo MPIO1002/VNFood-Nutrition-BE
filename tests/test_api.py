@@ -18,10 +18,16 @@ def test_web_interface_and_assets_are_served() -> None:
 
     assert page.status_code == 200
     assert "CalcuCalo Vision Lab" in page.text
+    assert "Model nhìn thấy" in page.text
+    assert 'id="measurementPanel"' in page.text
+    assert 'id="copyJsonButton"' in page.text
     assert script.status_code == 200
     assert "component_overrides_json" in script.text
+    assert "renderDetections" in script.text
+    assert "downloadJsonButton" in script.text
     assert stylesheet.status_code == 200
     assert ".workspace" in stylesheet.text
+    assert ".result-explainer" in stylesheet.text
 
 
 def test_model_path_finds_checkpoint_inside_training_run(tmp_path, monkeypatch) -> None:

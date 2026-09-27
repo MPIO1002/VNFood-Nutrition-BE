@@ -29,14 +29,26 @@ class FoodImageAnalyzer:
         nutrition_catalog: NutritionCatalog | None = None,
         component_detector: Detector | None = None,
         enable_component_pass: bool = False,
+        component_crop_padding: float = 0.08,
+        component_nms_iou: float = 0.50,
+        component_max_instances: int = 12,
         exclude_class_ids: set[int] | None = None,
     ) -> None:
+        if not 0.0 <= component_crop_padding <= 0.50:
+            raise ValueError("component_crop_padding must be between 0 and 0.50")
+        if not 0.0 < component_nms_iou <= 1.0:
+            raise ValueError("component_nms_iou must be between 0 and 1")
+        if component_max_instances <= 0:
+            raise ValueError("component_max_instances must be positive")
         self.detector = detector
         self.segmenter = segmenter
         self.portion_estimator = portion_estimator
         self.nutrition_catalog = nutrition_catalog
         self.component_detector = component_detector or detector
         self.enable_component_pass = enable_component_pass
+        self.component_crop_padding = component_crop_padding
+        self.component_nms_iou = component_nms_iou
+        self.component_max_instances = component_max_instances
         self.exclude_class_ids = exclude_class_ids if exclude_class_ids is not None else {27}
         self.plate_scale_estimator = PlateScaleEstimator()
 
@@ -124,6 +136,31 @@ class FoodImageAnalyzer:
             warnings.append("Không phát hiện món ăn nào vượt ngưỡng tin cậy.")
         elif self.nutrition_catalog is not None:
             self._attach_nutrition(items, warnings, component_overrides or {})
+            composite_foods = [
+                item.food
+                for item in items
+                if item.food is not None
+                and item.component_of is None
+                and self.nutrition_catalog.is_composite(item.label)
+            ]
+            catalog_only = [
+                str(food["name"])
+                for food in composite_foods
+                if int(food.get("visual_components_matched", 0)) == 0
+            ]
+            if catalog_only:
+                if self.enable_component_pass:
+                    warnings.append(
+                        "Không phát hiện trực tiếp thành phần nhỏ của: "
+                        + ", ".join(catalog_only)
+                        + "; dinh dưỡng hiện dùng tỷ lệ công thức mẫu."
+                    )
+                else:
+                    warnings.append(
+                        "Component pass đang tắt; thành phần của "
+                        + ", ".join(catalog_only)
+                        + " được suy ra từ công thức mẫu."
+                    )
         return AnalysisResult(
             image_width=width,
             image_height=height,
@@ -145,12 +182,20 @@ class FoodImageAnalyzer:
             if not self.nutrition_catalog.is_composite(parent.label):
                 continue
             parent_box = parent.bbox.clipped(image_width, image_height)
-            x1, y1 = int(parent_box.x1), int(parent_box.y1)
-            x2, y2 = int(np.ceil(parent_box.x2)), int(np.ceil(parent_box.y2))
+            pad_x = parent_box.width * self.component_crop_padding
+            pad_y = parent_box.height * self.component_crop_padding
+            crop_box = BoundingBox(
+                parent_box.x1 - pad_x,
+                parent_box.y1 - pad_y,
+                parent_box.x2 + pad_x,
+                parent_box.y2 + pad_y,
+            ).clipped(image_width, image_height)
+            x1, y1 = int(crop_box.x1), int(crop_box.y1)
+            x2, y2 = int(np.ceil(crop_box.x2)), int(np.ceil(crop_box.y2))
             crop = image[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-            best_by_ingredient: dict[str, Detection] = {}
+            candidates_by_ingredient: dict[str, list[Detection]] = {}
             for candidate in self.component_detector.predict(crop):
                 if normalize_food_name(candidate.label) == normalize_food_name(parent.label):
                     continue
@@ -163,6 +208,8 @@ class FoodImageAnalyzer:
                     candidate.bbox.x2 + x1,
                     candidate.bbox.y2 + y1,
                 ).clipped(image_width, image_height)
+                if not self._component_inside_parent(global_box, parent_box):
+                    continue
                 full_mask = None
                 if candidate.mask is not None:
                     crop_mask = normalize_mask(candidate.mask, crop.shape[:2])
@@ -175,14 +222,56 @@ class FoodImageAnalyzer:
                     bbox=global_box,
                     mask=full_mask,
                 )
-                previous = best_by_ingredient.get(ingredient_id)
-                if previous is None or mapped.confidence > previous.confidence:
-                    best_by_ingredient[ingredient_id] = mapped
+                candidates_by_ingredient.setdefault(ingredient_id, []).append(mapped)
 
-            for candidate in best_by_ingredient.values():
-                if not self._duplicates_existing(candidate, [*detections, *nested]):
-                    nested.append(candidate)
+            for ingredient_id, candidates in candidates_by_ingredient.items():
+                for candidate in self._component_nms(candidates):
+                    duplicate = any(
+                        self.nutrition_catalog.match_component(parent.label, current.label)
+                        == ingredient_id
+                        and self._bbox_iou(candidate.bbox, current.bbox)
+                        >= self.component_nms_iou
+                        for current in [*detections, *nested]
+                    )
+                    if not duplicate:
+                        nested.append(candidate)
         return nested
+
+    @staticmethod
+    def _component_inside_parent(child: BoundingBox, parent: BoundingBox) -> bool:
+        child_area = child.width * child.height
+        parent_area = parent.width * parent.height
+        if child_area >= parent_area * 0.90:
+            return False
+        x1 = max(child.x1, parent.x1)
+        y1 = max(child.y1, parent.y1)
+        x2 = min(child.x2, parent.x2)
+        y2 = min(child.y2, parent.y2)
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        return intersection / max(child_area, 1.0) >= 0.60
+
+    @staticmethod
+    def _bbox_iou(first: BoundingBox, second: BoundingBox) -> float:
+        x1 = max(first.x1, second.x1)
+        y1 = max(first.y1, second.y1)
+        x2 = min(first.x2, second.x2)
+        y2 = min(first.y2, second.y2)
+        intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        union = first.width * first.height + second.width * second.height - intersection
+        return intersection / max(union, 1.0)
+
+    def _component_nms(self, candidates: list[Detection]) -> list[Detection]:
+        kept: list[Detection] = []
+        for candidate in sorted(candidates, key=lambda item: item.confidence, reverse=True):
+            if any(
+                self._bbox_iou(candidate.bbox, current.bbox) >= self.component_nms_iou
+                for current in kept
+            ):
+                continue
+            kept.append(candidate)
+            if len(kept) >= self.component_max_instances:
+                break
+        return kept
 
     @staticmethod
     def _duplicates_existing(candidate: Detection, existing: list[Detection]) -> bool:
@@ -202,6 +291,41 @@ class FoodImageAnalyzer:
             if intersection / max(union, 1.0) >= 0.50:
                 return True
         return False
+
+    def _aggregate_component_evidence(
+        self,
+        candidates: list[tuple[AnalysisItem, ComponentEvidence]],
+    ) -> ComponentEvidence:
+        kept: list[tuple[AnalysisItem, ComponentEvidence]] = []
+        for item, evidence in sorted(
+            candidates,
+            key=lambda candidate: candidate[1].confidence,
+            reverse=True,
+        ):
+            if any(
+                self._bbox_iou(item.bbox, current_item.bbox) >= self.component_nms_iou
+                for current_item, _ in kept
+            ):
+                continue
+            kept.append((item, evidence))
+            if len(kept) >= self.component_max_instances:
+                break
+
+        best = max((evidence for _, evidence in kept), key=lambda item: item.confidence)
+        metric_method = "mask_area_x_thickness_x_density"
+        all_metric = all(evidence.method == metric_method for _, evidence in kept)
+        return ComponentEvidence(
+            label=best.label,
+            weight_g=(
+                sum(evidence.weight_g for _, evidence in kept)
+                if all_metric
+                else best.weight_g
+            ),
+            confidence=best.confidence,
+            method=metric_method if all_metric else best.method,
+            instance_count=len(kept),
+            labels=tuple(evidence.label for _, evidence in kept),
+        )
 
     def _apply_recipe_portion(
         self,
@@ -289,7 +413,9 @@ class FoodImageAnalyzer:
             parent_food_id = self.nutrition_catalog.food_id_for(parent.label)
             if parent_food_id is None:
                 continue
-            evidence: dict[str, ComponentEvidence] = {}
+            component_candidates: dict[
+                str, list[tuple[AnalysisItem, ComponentEvidence]]
+            ] = {}
             for child_index, child in enumerate(items):
                 if child_index == parent_index or child.component_of is not None:
                     continue
@@ -304,10 +430,12 @@ class FoodImageAnalyzer:
                     confidence=child.detection_confidence,
                     method=child.portion.method,
                 )
-                previous = evidence.get(ingredient_id)
-                if previous is None or candidate.confidence > previous.confidence:
-                    evidence[ingredient_id] = candidate
-                    child.component_of = parent_food_id
+                component_candidates.setdefault(ingredient_id, []).append((child, candidate))
+                child.component_of = parent_food_id
+            evidence = {
+                ingredient_id: self._aggregate_component_evidence(candidates)
+                for ingredient_id, candidates in component_candidates.items()
+            }
             evidence_by_parent[parent_index] = evidence
 
         missing_labels: list[str] = []
