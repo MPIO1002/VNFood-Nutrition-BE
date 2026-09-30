@@ -20,7 +20,7 @@ from .segmenter import create_segmenter
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 EXPECTED_CLASS_COUNT = 68
-app = FastAPI(title="CalcuCalo Vision API", version="0.5.0")
+app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
 app.mount("/assets", StaticFiles(directory=WEB_ROOT / "assets"), name="assets")
 
 
@@ -154,7 +154,7 @@ def get_analyzer() -> FoodImageAnalyzer:
     detector = create_detector(
         model_path,
         classes_path=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml",
-        confidence=_env_float("CALCUCALO_CONFIDENCE", 0.25, 0.01, 1.0),
+        confidence=_env_float("CALCUCALO_CONFIDENCE", 0.38, 0.01, 1.0),
         iou=_env_float("CALCUCALO_IOU", 0.60, 0.01, 1.0),
         image_size=_env_int("CALCUCALO_IMAGE_SIZE", 640, 160, 2048),
         device=device,

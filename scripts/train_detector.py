@@ -22,6 +22,13 @@ def unit_interval(value: str) -> float:
     return parsed
 
 
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0.0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train, continue or fine-tune YOLO detection on VietFood67"
@@ -48,13 +55,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Ultralytics multi-scale range; 0 disables it",
     )
-    parser.add_argument("--learning-rate", type=float, help="Override lr0")
+    parser.add_argument(
+        "--optimizer",
+        choices=("auto", "SGD", "Adam", "AdamW", "NAdam", "RAdam", "RMSProp"),
+        help="Optimizer override; fine-tune defaults to SGD so lr0 is not ignored by auto mode",
+    )
+    parser.add_argument("--learning-rate", type=positive_float, help="Override lr0")
     parser.add_argument(
         "--final-learning-rate-factor",
-        type=float,
+        type=positive_float,
         help="Override lrf (final learning rate = lr0 * lrf)",
     )
-    parser.add_argument("--warmup-epochs", type=float, help="Override warmup epochs")
+    parser.add_argument("--warmup-epochs", type=positive_float, help="Override warmup epochs")
     parser.add_argument("--save-period", type=int, default=1)
     parser.add_argument("--project", default="runs/detect")
     parser.add_argument("--name", default="vietfood67_yolo11n")
@@ -136,6 +148,20 @@ def _json_metrics(results: object) -> dict[str, object]:
     return payload
 
 
+def _fine_tune_options(args: argparse.Namespace) -> dict[str, object]:
+    """Use an explicit optimizer so Ultralytics cannot override fine-tune lr0."""
+    return {
+        "optimizer": args.optimizer or "SGD",
+        "lr0": args.learning_rate if args.learning_rate is not None else 0.001,
+        "lrf": (
+            args.final_learning_rate_factor
+            if args.final_learning_rate_factor is not None
+            else 0.1
+        ),
+        "warmup_epochs": args.warmup_epochs if args.warmup_epochs is not None else 1.0,
+    }
+
+
 def main() -> int:
     args = build_parser().parse_args()
     try:
@@ -191,22 +217,15 @@ def main() -> int:
             "deterministic": True,
         }
         if args.fine_tune:
-            train_options["lr0"] = (
-                args.learning_rate if args.learning_rate is not None else 0.001
-            )
-            train_options["lrf"] = (
-                args.final_learning_rate_factor
-                if args.final_learning_rate_factor is not None
-                else 0.1
-            )
-            train_options["warmup_epochs"] = (
-                args.warmup_epochs if args.warmup_epochs is not None else 1.0
-            )
+            train_options.update(_fine_tune_options(args))
             print(
                 f"Fine-tune phase: {args.epochs} additional epochs from {args.model}. "
-                "Epoch numbering starts again at 1 in the new run."
+                "Epoch numbering starts again at 1 in the new run. "
+                f"Optimizer={train_options['optimizer']}, lr0={train_options['lr0']}."
             )
         else:
+            if args.optimizer is not None:
+                train_options["optimizer"] = args.optimizer
             if args.learning_rate is not None:
                 train_options["lr0"] = args.learning_rate
             if args.final_learning_rate_factor is not None:

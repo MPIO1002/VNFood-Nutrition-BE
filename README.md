@@ -43,6 +43,7 @@ CalcuCalo/
 │
 ├── scripts/                              # Các entry point phục vụ dữ liệu, train và đánh giá
 │   ├── download_reference_weights.py     # Tải và kiểm tra checksum checkpoint demo
+│   ├── evaluate_detector.py              # Đánh giá val/test và export mà không train lại
 │   ├── prepare_vietfood67.py             # Wrapper chuẩn bị/kiểm tra dataset VietFood67
 │   ├── train_detector.py                 # Fine-tune YOLO, resume và export ONNX
 │   ├── validate_catalog.py               # Kiểm tra coverage, ID, gram và macro của catalog
@@ -395,7 +396,7 @@ Mở `http://localhost:8000`. Giao diện hỗ trợ:
 Các cấu hình inference tùy chọn:
 
 ```powershell
-$env:CALCUCALO_CONFIDENCE = "0.25"
+$env:CALCUCALO_CONFIDENCE = "0.38" # đỉnh F1 validation v5 xấp xỉ 0.384
 $env:CALCUCALO_IOU = "0.60"
 $env:CALCUCALO_IMAGE_SIZE = "640"
 ```

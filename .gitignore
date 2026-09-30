@@ -20,3 +20,4 @@ output/
 /vietfood67.yaml
 /vietfood67_yolo11n_v1/
 /vietfood67_yolo11n_v4_no_mosaic_10e/
+/vietfood67_yolo11n_v5_ft_from_v4_5e/

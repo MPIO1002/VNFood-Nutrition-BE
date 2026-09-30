@@ -168,7 +168,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON file mapping food_id to component grams from user corrections",
     )
     analyze.add_argument("--json-format", choices=("full", "nutrition"), default="full")
-    analyze.add_argument("--confidence", type=float, default=0.25)
+    analyze.add_argument(
+        "--confidence",
+        type=float,
+        default=0.38,
+        help="Dish confidence threshold; v5 validation F1 peaks near 0.384",
+    )
     analyze.add_argument("--iou", type=float, default=0.60)
     analyze.add_argument("--image-size", type=int, default=640)
     analyze.add_argument("--device", help="cpu, mps or CUDA index such as 0")

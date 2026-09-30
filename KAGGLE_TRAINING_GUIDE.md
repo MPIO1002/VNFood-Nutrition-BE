@@ -665,7 +665,7 @@ import sys
 !{sys.executable} -c "import calcucalo; print('CalcuCalo:', calcucalo.__version__)"
 ```
 
-Kết quả mong đợi là `CalcuCalo: 0.5.0`.
+Kết quả mong đợi là `CalcuCalo: 0.5.1` hoặc mới hơn.
 
 ### 22.3. Khôi phục checkpoint v4
 
@@ -762,6 +762,7 @@ RUN_NAME = "vietfood67_yolo11n_v5_ft_from_v4_5e"
   --mosaic 0.0 \
   --close-mosaic 0 \
   --multi-scale 0.0 \
+  --optimizer SGD \
   --learning-rate 0.001 \
   --final-learning-rate-factor 0.1 \
   --warmup-epochs 1 \
@@ -806,6 +807,7 @@ RUN_NAME_SMALL = "vietfood67_yolo11n_v5_small_768_5e"
   --patience 5 \
   --mosaic 0.0 \
   --close-mosaic 0 \
+  --optimizer SGD \
   --learning-rate 0.001 \
   --final-learning-rate-factor 0.1 \
   --warmup-epochs 1 \
@@ -867,6 +869,36 @@ Trong JSON, kiểm tra:
 Không dùng riêng mAP của VietFood67 để kết luận calories chính xác. Dataset này chưa có ground
 truth mask và gram cho từng thành phần. Muốn đo chất lượng bóc tách thật sự phải tạo test set
 component-level gồm box/mask, cân gram từng thành phần và tổng calories tham chiếu.
+
+### 22.9. Hoàn tất test và ONNX nếu train đã xong
+
+Nếu đã có `best.pt` nhưng folder chưa có `test_metrics.json` hoặc `best.onnx`, **không train
+lại**. Chạy script đánh giá độc lập:
+
+```python
+V5_BEST = (
+    "/kaggle/working/runs/detect/"
+    "vietfood67_yolo11n_v5_ft_from_v4_5e/weights/best.pt"
+)
+
+!{sys.executable} scripts/evaluate_detector.py \
+  --data "/kaggle/working/vietfood67.yaml" \
+  --model "{V5_BEST}" \
+  --split test \
+  --image-size 640 \
+  --batch 32 \
+  --device 0 \
+  --workers 4 \
+  --project "/kaggle/working/runs/val" \
+  --name "v5_ft_from_v4_test" \
+  --export-onnx
+```
+
+Kết quả:
+
+- `test_metrics.json` nằm trong folder train v5;
+- plot test nằm trong `/kaggle/working/runs/val/v5_ft_from_v4_test`;
+- `best.onnx` nằm cạnh `best.pt` trong folder `weights`.
 
 ## Tham khảo Kaggle
 

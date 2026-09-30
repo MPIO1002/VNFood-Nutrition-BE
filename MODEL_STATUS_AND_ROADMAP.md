@@ -1,14 +1,15 @@
 # Báo cáo trạng thái model CalcuCalo Vision
 
-Phiên bản mới nhất: **0.5.0**
+Phiên bản mới nhất: **0.5.1**
 
-Ngày cập nhật báo cáo gần nhất: **27/09/2026**
+Ngày cập nhật báo cáo gần nhất: **30/09/2026**
 
 ## Danh sách phiên bản
 
 | Phiên bản | Ngày báo cáo | Trạng thái | Nội dung nổi bật |
 |---|---|---|---|
-| [0.5.0](#phiên-bản-050--hiện-tại) | 27/09/2026 | Hiện tại | Component pass độ phân giải cao, multi-instance, audit nhãn, fine-tune an toàn và test tự động |
+| [0.5.1](#phiên-bản-051--hiện-tại) | 30/09/2026 | Hiện tại | Đánh giá v5, sửa optimizer fine-tune, ngưỡng confidence theo F1 và test/export độc lập |
+| [0.5.0](#phiên-bản-050--lưu-trữ) | 27/09/2026 | Lưu trữ | Component pass độ phân giải cao, multi-instance, audit nhãn, fine-tune an toàn và test tự động |
 | [0.4.0](#phiên-bản-040--lưu-trữ) | 26/09/2026 | Lưu trữ | Web UI, kiểm tra ảnh, readiness theo tiến độ train và cấu hình thí nghiệm detector |
 | [0.3.0](#phiên-bản-030--lưu-trữ) | 26/09/2026 | Lưu trữ + hậu kiểm | Calculation trace và checkpoint VietFood67 15/20 epoch |
 | [0.2.0](#phiên-bản-020--lưu-trữ) | 21/09/2026 | Lưu trữ | Baseline end-to-end đầu tiên cho detection, portion và nutrition |
@@ -17,7 +18,46 @@ Quy ước cập nhật: phiên bản mới luôn được thêm lên trên; n�
 
 ---
 
-## Phiên bản 0.5.0 — hiện tại
+## Phiên bản 0.5.1 — hiện tại
+
+Ngày cập nhật: 30/09/2026<br>
+Phiên bản mã nguồn: 0.5.1
+
+### Kết quả detector v5
+
+Run `vietfood67_yolo11n_v5_ft_from_v4_5e` hoàn thành 5 epoch fine-tune và đạt validation:
+
+| Precision | Recall | mAP50 | mAP50–95 |
+|---:|---:|---:|---:|
+| 0,78613 | 0,70297 | 0,77935 | 0,62579 |
+
+So với v4 epoch 10, v5 tăng precision 0,02881, recall 0,02096, mAP50 0,02900 và
+mAP50–95 0,02351. So với v3 epoch 15, v5 gần như ngang mAP, precision cao hơn 0,01044 nhưng
+recall thấp hơn 0,00767. Đường validation vẫn cải thiện ở epoch cuối và chưa có dấu hiệu overfit.
+
+Folder đánh giá hiện thiếu `test_metrics.json` và `best.onnx`; vì vậy đây mới là kết quả
+validation, chưa phải test độc lập. Báo cáo chi tiết nằm trong `MODEL_EVALUATION_V5.md`.
+
+### Sửa đổi sau đánh giá
+
+- Fine-tune mặc định dùng optimizer `SGD` rõ ràng. Kết quả v5 cho thấy `optimizer=auto` đã làm
+  learning rate thực tế cao hơn `lr0=0.001`, gây dao động train loss ở đầu phase.
+- Thêm `--optimizer` vào `train_detector.py` và test bảo đảm fine-tune không quay lại auto.
+- Đổi confidence mặc định của dish detector từ 0,25 thành 0,38; F1 v5 đạt đỉnh khoảng 0,74
+  tại confidence 0,384. Component pass vẫn dùng 0,15 vì đã bị giới hạn bởi crop và recipe.
+- Thêm `scripts/evaluate_detector.py` để chạy `val`/`test`, lưu JSON metric và export ONNX mà
+  không cần train lại.
+- Thêm artifact folder v5 vào `.gitignore`.
+
+### Quyết định
+
+V5 là detector candidate ưu tiên hiện tại, nhưng chưa đặt `production_ready=true`. Cần chạy test
+split độc lập, kiểm tra ảnh điện thoại và đo end-to-end component/gram/calories trước khi triển
+khai. Chưa fine-tune thêm cho đến khi có metric test.
+
+---
+
+## Phiên bản 0.5.0 — lưu trữ
 
 Ngày cập nhật: 27/09/2026<br>
 Phiên bản mã nguồn: 0.5.0
