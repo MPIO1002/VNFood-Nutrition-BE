@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
-from dataclasses import dataclass
+
+import yaml
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    pass
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +27,6 @@ def clean_number(value: float, ndigits: int = 1) -> int | float:
     rounded = round(float(value), ndigits)
     return int(rounded) if rounded.is_integer() else rounded
 
-
-@dataclass(frozen=True)
-class ComponentEvidence:
-    label: str
-    weight_g: float
-    confidence: float
-    method: str
-    instance_count: int = 1
-    labels: tuple[str, ...] = ()
 
 
 class NutritionCatalog:
@@ -132,23 +130,10 @@ class NutritionCatalog:
         *,
         estimated_portion_g: float | None = None,
         portion_method: str | None = None,
-        evidence: dict[str, ComponentEvidence] | None = None,
-        component_overrides_g: dict[str, float] | None = None,
     ) -> dict[str, Any] | None:
         profile = self.profile_for(label)
         if profile is None:
             return None
-        evidence = evidence or {}
-        if component_overrides_g is not None and not isinstance(component_overrides_g, dict):
-            raise ValueError("component_overrides_g must be an object")
-        try:
-            normalized_overrides = {
-                normalize_food_name(key): float(value)
-                for key, value in (component_overrides_g or {}).items()
-            }
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Every component override must be a numeric gram value") from exc
-        applied_override_keys: set[str] = set()
         base_portion = float(profile["base_portion_g"])
         # A generic uncalibrated mass prior is weaker than the recipe-specific base portion.
         if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
@@ -160,8 +145,6 @@ class NutritionCatalog:
         public_components: list[dict[str, Any]] = []
         component_estimates: list[dict[str, Any]] = []
         totals = {"calories_kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-        visual_matches = 0
-        visual_instances = 0
         for component in profile["components"]:
             ingredient_id = str(component["ingredient_id"])
             ingredient = self.ingredients[ingredient_id]
@@ -175,32 +158,7 @@ class NutritionCatalog:
             }
             public_components.append(public)
 
-            matched = evidence.get(ingredient_id)
-            override_keys = {
-                normalize_food_name(ingredient_id),
-                normalize_food_name(str(ingredient["name"])),
-                normalize_food_name(str(public["name"])),
-            }
-            override_matches = {
-                key: normalized_overrides[key] for key in override_keys if key in normalized_overrides
-            }
-            if override_matches:
-                if len(set(override_matches.values())) > 1:
-                    raise ValueError(f"Conflicting overrides for {public['name']}")
-                component_weight = next(iter(override_matches.values()))
-                if component_weight <= 0:
-                    raise ValueError(f"Component override for {public['name']} must be positive")
-                basis = "user_override"
-                applied_override_keys.update(override_matches)
-            elif matched and matched.method == "mask_area_x_thickness_x_density":
-                component_weight = matched.weight_g
-                basis = "visual_metric_estimate"
-                visual_matches += 1
-            else:
-                component_weight = float(component["default_g"]) * portion_scale
-                basis = "visual_match" if matched else "catalog_prior"
-                visual_matches += int(matched is not None)
-
+            component_weight = float(component["default_g"]) * portion_scale
             factor = component_weight / 100.0
             calculated_nutrients = {
                 "calories_kcal": float(public["cal_per_100g"]) * factor,
@@ -213,7 +171,7 @@ class NutritionCatalog:
                 "name": public["name"],
                 "estimated_g": round(component_weight, 1),
                 **{key: round(value, 1) for key, value in calculated_nutrients.items()},
-                "basis": basis,
+                "basis": "catalog_prior",
                 "calculation": {
                     "model": "per_100g_nutrition_scaling",
                     "formula": "nutrient_amount = nutrient_per_100g * estimated_g / 100",
@@ -223,7 +181,7 @@ class NutritionCatalog:
                         "protein_per_100g": round(float(public["protein"]), 6),
                         "fat_per_100g": round(float(public["fat"]), 6),
                         "carb_per_100g": round(float(public["carb"]), 6),
-                        "component_weight_basis": basis,
+                        "component_weight_basis": "catalog_prior",
                     },
                     "intermediate": {"portion_factor": round(factor, 8)},
                     "outputs": {
@@ -231,12 +189,6 @@ class NutritionCatalog:
                     },
                 },
             }
-            if matched:
-                estimate["visual_label"] = matched.label
-                estimate["visual_confidence"] = round(matched.confidence, 3)
-                estimate["visual_instance_count"] = matched.instance_count
-                estimate["visual_labels"] = list(matched.labels or (matched.label,))
-                visual_instances += matched.instance_count
             component_estimates.append(estimate)
             for nutrient in totals:
                 totals[nutrient] += float(estimate[nutrient])
@@ -256,17 +208,7 @@ class NutritionCatalog:
                 "component_count": len(component_estimates),
                 "outputs": rounded_totals,
             },
-            "analysis_basis": (
-                "visual_components_plus_recipe_catalog"
-                if visual_matches
-                else "dish_detection_plus_recipe_catalog"
-            ),
-            "visual_components_matched": visual_matches,
-            "visual_instances_matched": visual_instances,
-            "user_components_overridden": len(applied_override_keys),
-            "unmatched_component_overrides": sorted(
-                set(normalized_overrides) - applied_override_keys
-            ),
+            "analysis_basis": "dish_detection_plus_recipe_catalog",
             "data_quality": str(profile.get("data_quality", self.data_quality)),
             "nutrition_reference": self.nutrition_reference,
             "notes": list(map(str, profile.get("notes", []))),
@@ -287,3 +229,217 @@ class NutritionCatalog:
                 for component in food["components"]
             ],
         }
+
+class NutritionDB:
+    def __init__(self, config_path: str | Path, fallback_catalog: NutritionCatalog):
+        self.fallback = fallback_catalog
+        self.config_path = Path(config_path)
+        self.db_config = None
+        self._dish_map = {}
+        
+        import os
+        try:
+            if self.config_path.exists():
+                with self.config_path.open("r", encoding="utf-8") as f:
+                    self.db_config = yaml.safe_load(f)
+            
+            if self.db_config or os.getenv("DATABASE_URL"):
+                self._load_dishes()
+        except Exception as e:
+            logging.warning(f"Could not load DB config or connect: {e}")
+
+    def _get_conn(self):
+        import os
+        import psycopg2
+        env_uri = os.getenv("DATABASE_URL")
+        if env_uri:
+            return psycopg2.connect(env_uri)
+        if self.db_config and "uri" in self.db_config:
+            return psycopg2.connect(self.db_config["uri"])
+        return psycopg2.connect(
+            host=self.db_config["host"],
+            port=self.db_config["port"],
+            user=self.db_config["user"],
+            password=self.db_config["password"],
+            database=self.db_config["database"]
+        )
+
+    def _load_dishes(self):
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cursor.execute("SELECT id, dishes_name FROM dishes")
+            for row in cursor.fetchall():
+                normalized = normalize_food_name(row["dishes_name"])
+                self._dish_map[normalized] = row["dishes_name"]
+            conn.close()
+        except Exception as e:
+            logging.warning(f"DB load dishes failed: {e}")
+
+    def base_portion_for(self, label: str) -> float | None:
+        import os
+        if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
+            return self.fallback.base_portion_for(label)
+            
+        normalized_label = normalize_food_name(label)
+        db_dish_name = self._dish_map.get(normalized_label)
+        
+        if not db_dish_name:
+            return self.fallback.base_portion_for(label)
+
+        try:
+            import psycopg2
+            import psycopg2.extras
+            conn = self._get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            query = """
+            SELECT SUM(di.quantity) as base_portion 
+            FROM dish_ingredients di 
+            JOIN dishes d ON di.dish_id = d.id 
+            WHERE d.dishes_name = %s
+            """
+            cursor.execute(query, (db_dish_name,))
+            row = cursor.fetchone()
+            conn.close()
+            if row and row["base_portion"]:
+                return float(row["base_portion"])
+        except Exception as e:
+            import logging
+            logging.warning(f"Error getting base portion for {label}: {e}")
+            
+        return self.fallback.base_portion_for(label)
+
+    def analyze(
+        self,
+        label: str,
+        *,
+        estimated_portion_g: float | None = None,
+        portion_method: str | None = None,
+    ) -> dict[str, Any] | None:
+        import os
+        if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
+            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+            
+        normalized_label = normalize_food_name(label)
+        db_dish_name = self._dish_map.get(normalized_label)
+        
+        if not db_dish_name:
+            # Fallback
+            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            # Fetch components
+            query = """
+            SELECT
+                d.id AS dish_id,
+                d.dishes_name AS dish_name,
+                i.id AS ingredient_id,
+                i.ingredients_name AS ingredient_name,
+                di.quantity AS default_g,
+                i.calories AS cal_per_100g,
+                i.protein AS protein_per_100g,
+                i.fat AS fat_per_100g,
+                i.carb AS carb_per_100g
+            FROM dishes d
+            JOIN dish_ingredients di ON d.id = di.dish_id
+            JOIN ingredients i       ON di.ingredient_id = i.id
+            WHERE d.dishes_name = %s
+            """
+            cursor.execute(query, (db_dish_name,))
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows:
+                return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+                
+            base_portion = sum(float(r["default_g"]) for r in rows)
+            if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
+                estimated_portion = base_portion
+            else:
+                estimated_portion = max(float(estimated_portion_g), 1.0)
+            portion_scale = estimated_portion / base_portion
+
+            public_components = []
+            component_estimates = []
+            totals = {"calories_kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+            
+            for r in rows:
+                public = {
+                    "name": str(r["ingredient_name"]),
+                    "default_g": clean_number(float(r["default_g"])),
+                    "cal_per_100g": clean_number(float(r["cal_per_100g"])),
+                    "protein": round(float(r["protein_per_100g"]), 1),
+                    "fat": round(float(r["fat_per_100g"]), 1),
+                    "carb": round(float(r["carb_per_100g"]), 1),
+                }
+                public_components.append(public)
+                
+                component_weight = float(r["default_g"]) * portion_scale
+                factor = component_weight / 100.0
+                
+                calculated_nutrients = {
+                    "calories_kcal": float(r["cal_per_100g"]) * factor,
+                    "protein_g": float(r["protein_per_100g"]) * factor,
+                    "fat_g": float(r["fat_per_100g"]) * factor,
+                    "carb_g": float(r["carb_per_100g"]) * factor,
+                }
+                
+                estimate = {
+                    "ingredient_id": str(r["ingredient_id"]),
+                    "name": public["name"],
+                    "estimated_g": round(component_weight, 1),
+                    **{key: round(value, 1) for key, value in calculated_nutrients.items()},
+                    "basis": "catalog_prior",
+                    "calculation": {
+                        "model": "per_100g_nutrition_scaling",
+                        "formula": "nutrient_amount = nutrient_per_100g * estimated_g / 100",
+                        "inputs": {
+                            "estimated_g": round(component_weight, 6),
+                            "cal_per_100g": round(float(r["cal_per_100g"]), 6),
+                            "protein_per_100g": round(float(r["protein_per_100g"]), 6),
+                            "fat_per_100g": round(float(r["fat_per_100g"]), 6),
+                            "carb_per_100g": round(float(r["carb_per_100g"]), 6),
+                            "component_weight_basis": "catalog_prior",
+                        },
+                        "intermediate": {"portion_factor": round(factor, 8)},
+                        "outputs": {
+                            key: round(value, 6) for key, value in calculated_nutrients.items()
+                        },
+                    },
+                }
+                component_estimates.append(estimate)
+                for nutrient in totals:
+                    totals[nutrient] += float(estimate[nutrient])
+
+            rounded_totals = {key: round(value, 1) for key, value in totals.items()}
+            
+            dish_id = str(rows[0]["dish_id"])
+            return {
+                "food_id": f"DB_{dish_id}",
+                "name": db_dish_name,
+                "base_portion_g": clean_number(base_portion),
+                "components": public_components,
+                "estimated_portion_g": round(estimated_portion, 1),
+                "estimated_components": component_estimates,
+                "estimated_totals": rounded_totals,
+                "total_calculation": {
+                    "model": "sum_component_nutrients",
+                    "formula": "dish_total = sum(component_nutrient_amounts)",
+                    "component_count": len(component_estimates),
+                    "outputs": rounded_totals,
+                },
+                "analysis_basis": "dish_detection_plus_recipe_database",
+                "data_quality": "database",
+                "nutrition_reference": "nutrition_db",
+                "notes": ["Fetched from MySQL database"],
+            }
+        except Exception as e:
+            logging.error(f"DB Error for dish {db_dish_name}: {e}")
+            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+
+    @staticmethod
+    def compact(food: dict[str, Any]) -> dict[str, Any]:
+        return NutritionCatalog.compact(food)

@@ -109,7 +109,6 @@ class AnalysisItem:
     polygons: list[list[list[int]]]
     portion: PortionEstimate
     food: dict[str, Any] | None = None
-    component_of: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -122,8 +121,6 @@ class AnalysisItem:
         }
         if self.food is not None:
             result["food"] = self.food
-        if self.component_of is not None:
-            result["component_of"] = self.component_of
         return result
 
 
@@ -152,7 +149,7 @@ class AnalysisResult:
                 ],
             },
             "items": [item.to_dict() for item in self.items],
-            "foods": [item.food for item in self.items if item.food and not item.component_of],
+            "foods": [item.food for item in self.items if item.food is not None],
             "warnings": self.warnings,
         }
 
@@ -164,7 +161,7 @@ class AnalysisResult:
     ) -> dict[str, Any]:
         from .nutrition import NutritionCatalog
 
-        foods = [item.food for item in self.items if item.food and not item.component_of]
+        foods = [item.food for item in self.items if item.food is not None]
         if compact:
             foods = [NutritionCatalog.compact(food) for food in foods]
         if unwrap_single and len(foods) == 1:

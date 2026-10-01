@@ -35,38 +35,17 @@ def run_analyze(args: argparse.Namespace) -> int:
         device=device,
     )
     segmenter = create_segmenter(args.segmenter, sam_model=args.sam_model, device=device)
-    component_detector = detector
-    if args.component_pass:
-        component_detector = create_detector(
-            args.component_model or args.model,
-            classes_path=args.classes,
-            confidence=args.component_confidence,
-            iou=args.component_iou,
-            image_size=args.component_image_size,
-            device=device,
-        )
     estimator = PortionEstimator(args.priors)
-    component_overrides = None
-    if args.component_overrides:
-        component_overrides = json.loads(
-            Path(args.component_overrides).read_text(encoding="utf-8")
-        )
     analyzer = FoodImageAnalyzer(
         detector,
         segmenter,
         estimator,
         nutrition_catalog=NutritionCatalog(args.catalog),
-        component_detector=component_detector,
-        enable_component_pass=args.component_pass,
-        component_crop_padding=args.component_crop_padding,
-        component_nms_iou=args.component_nms_iou,
-        component_max_instances=args.component_max_instances,
     )
     result = analyzer.analyze(
         args.image,
         plate_diameter_cm=args.plate_diameter_cm,
         cm_per_pixel=args.cm_per_pixel,
-        component_overrides=component_overrides,
     )
     output = (
         result.to_nutrition_dict(compact=True, unwrap_single=True)
@@ -150,23 +129,6 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--classes", default=str(DEFAULT_CLASSES))
     analyze.add_argument("--priors", default=str(DEFAULT_PRIORS))
     analyze.add_argument("--catalog", default=str(DEFAULT_CATALOG))
-    analyze.add_argument(
-        "--component-pass",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Run a second high-resolution detector pass inside complex dishes (default: on)",
-    )
-    analyze.add_argument("--component-model", help="Optional component-specific YOLO weights")
-    analyze.add_argument("--component-confidence", type=float, default=0.15)
-    analyze.add_argument("--component-iou", type=float, default=0.50)
-    analyze.add_argument("--component-image-size", type=int, default=960)
-    analyze.add_argument("--component-crop-padding", type=float, default=0.08)
-    analyze.add_argument("--component-nms-iou", type=float, default=0.50)
-    analyze.add_argument("--component-max-instances", type=int, default=12)
-    analyze.add_argument(
-        "--component-overrides",
-        help="JSON file mapping food_id to component grams from user corrections",
-    )
     analyze.add_argument("--json-format", choices=("full", "nutrition"), default="full")
     analyze.add_argument(
         "--confidence",

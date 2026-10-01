@@ -1,27 +1,30 @@
 from __future__ import annotations
 
-import json
 import os
+import base64
+import cv2
+import numpy as np
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+
 from PIL import UnidentifiedImageError
 
 from .analyzer import FoodImageAnalyzer
 from .detector import create_detector
-from .nutrition import NutritionCatalog
+from .nutrition import NutritionCatalog, NutritionDB
 from .portion import PortionEstimator
 from .segmenter import create_segmenter
+from .visualize import render_overlay
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WEB_ROOT = Path(__file__).resolve().parent / "web"
 EXPECTED_CLASS_COUNT = 68
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
-app.mount("/assets", StaticFiles(directory=WEB_ROOT / "assets"), name="assets")
 
 
 def _model_path() -> tuple[Path | None, str]:
@@ -159,47 +162,22 @@ def get_analyzer() -> FoodImageAnalyzer:
         image_size=_env_int("CALCUCALO_IMAGE_SIZE", 640, 160, 2048),
         device=device,
     )
-    component_pass = os.getenv("CALCUCALO_COMPONENT_PASS", "true").casefold() in {
-        "1",
-        "true",
-        "yes",
-    }
-    component_detector = detector
-    component_model = os.getenv("CALCUCALO_COMPONENT_MODEL")
-    if component_pass:
-        component_detector = create_detector(
-            component_model or model_path,
-            classes_path=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml",
-            confidence=_env_float("CALCUCALO_COMPONENT_CONFIDENCE", 0.15, 0.01, 1.0),
-            iou=_env_float("CALCUCALO_COMPONENT_IOU", 0.50, 0.01, 1.0),
-            image_size=_env_int("CALCUCALO_COMPONENT_IMAGE_SIZE", 960, 160, 2048),
-            device=device,
-        )
     segmenter = create_segmenter(segmenter_name, sam_model=sam_model, device=device)
     catalog = os.getenv(
         "CALCUCALO_FOOD_CATALOG",
         str(PROJECT_ROOT / "configs" / "food_catalog.json"),
     )
+    fallback_catalog = NutritionCatalog(catalog)
+    db_config_path = PROJECT_ROOT / "configs" / "db_config.yaml"
+    nutrition_db = NutritionDB(db_config_path, fallback_catalog)
     return FoodImageAnalyzer(
         detector,
         segmenter,
         PortionEstimator(priors),
-        nutrition_catalog=NutritionCatalog(catalog),
-        component_detector=component_detector,
-        enable_component_pass=component_pass,
-        component_crop_padding=_env_float(
-            "CALCUCALO_COMPONENT_CROP_PADDING", 0.08, 0.0, 0.50
-        ),
-        component_nms_iou=_env_float("CALCUCALO_COMPONENT_NMS_IOU", 0.50, 0.01, 1.0),
-        component_max_instances=_env_int(
-            "CALCUCALO_COMPONENT_MAX_INSTANCES", 12, 1, 100
-        ),
+        nutrition_catalog=nutrition_db,
     )
 
 
-@app.get("/", include_in_schema=False)
-def web_app() -> FileResponse:
-    return FileResponse(WEB_ROOT / "index.html")
 
 
 @app.get("/health")
@@ -226,11 +204,6 @@ def model_info() -> dict[str, object]:
         if hasattr(analyzer.detector, "info")
         else {"backend": type(analyzer.detector).__name__}
     )
-    component_detector_info = (
-        analyzer.component_detector.info()
-        if hasattr(analyzer.component_detector, "info")
-        else {"backend": type(analyzer.component_detector).__name__}
-    )
     model_path, source = _model_path()
     return {
         "api_version": app.version,
@@ -240,11 +213,6 @@ def model_info() -> dict[str, object]:
         "readiness": _model_readiness(detector_info),
         "pipeline": {
             "segmenter": type(analyzer.segmenter).__name__,
-            "component_pass": analyzer.enable_component_pass,
-            "component_detector": component_detector_info,
-            "component_crop_padding": analyzer.component_crop_padding,
-            "component_nms_iou": analyzer.component_nms_iou,
-            "component_max_instances": analyzer.component_max_instances,
             "nutrition_catalog": analyzer.nutrition_catalog is not None,
             "portion_estimation": "metric_geometry_or_catalog_prior",
             "depth_measurement": False,
@@ -258,20 +226,11 @@ async def analyze_food(
     plate_diameter_cm: Annotated[float | None, Form()] = None,
     cm_per_pixel: Annotated[float | None, Form()] = None,
     response_format: Annotated[str, Form()] = "full",
-    component_overrides_json: Annotated[str | None, Form()] = None,
 ) -> dict[str, object]:
     if plate_diameter_cm is not None and cm_per_pixel is not None:
         raise HTTPException(status_code=422, detail="Use only one scale calibration method")
     if response_format not in {"full", "nutrition"}:
         raise HTTPException(status_code=422, detail="response_format must be full or nutrition")
-    component_overrides = None
-    if component_overrides_json:
-        try:
-            component_overrides = json.loads(component_overrides_json)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="Invalid component_overrides_json") from exc
-        if not isinstance(component_overrides, dict):
-            raise HTTPException(status_code=422, detail="component_overrides_json must be an object")
     payload = await image.read()
     if not payload:
         raise HTTPException(status_code=422, detail="Empty image")
@@ -283,12 +242,33 @@ async def analyze_food(
             payload,
             plate_diameter_cm=plate_diameter_cm,
             cm_per_pixel=cm_per_pixel,
-            component_overrides=component_overrides,
         )
     except (UnidentifiedImageError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+        
+    # Generate visualization overlay
+    try:
+        nparr = np.frombuffer(payload, np.uint8)
+        image_rgb = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if image_rgb is not None:
+            image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_BGR2RGB)
+            overlay_rgb = render_overlay(image_rgb, result)
+            overlay_bgr = cv2.cvtColor(overlay_rgb, cv2.COLOR_RGB2BGR)
+            _, buffer = cv2.imencode('.jpg', overlay_bgr)
+            visual_base64 = base64.b64encode(buffer).decode('utf-8')
+        else:
+            visual_base64 = None
+    except Exception:
+        visual_base64 = None
+
     if response_format == "nutrition":
-        return result.to_nutrition_dict(compact=True, unwrap_single=True)
-    return result.to_dict()
+        out = result.to_nutrition_dict(compact=True, unwrap_single=True)
+    else:
+        out = result.to_dict()
+        
+    if visual_base64:
+        out["visual_base64"] = visual_base64
+        
+    return out
