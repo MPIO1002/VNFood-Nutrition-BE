@@ -60,13 +60,33 @@ class PortionEstimator:
         mask: np.ndarray,
         calibration: ScaleCalibration | None,
         mask_confidence: float = 1.0,
+        container_type: str | None = None,
+        container_diameter_cm: float | None = None,
+        container_length_cm: float | None = None,
+        container_width_cm: float | None = None,
     ) -> PortionEstimate:
         prior = self.prior_for(label)
         area_px = int(np.count_nonzero(mask))
 
         # The visible surface of soup is not its volume. Without bowl geometry or RGB-D,
         # a class serving prior is safer than pretending surface area is liquid volume.
-        if calibration is None or prior.liquid:
+        # EXCEPT when we know the container is a bowl and have its diameter.
+        # For box type: can calculate if we have length and width (no calibration needed)
+        can_calculate_box = (
+            prior.liquid
+            and container_type == "hop"
+            and container_length_cm is not None
+            and container_width_cm is not None
+        )
+        # For round containers: need calibration + diameter
+        can_calculate_bowl = (
+            prior.liquid
+            and container_type in ["to", "chen"]
+            and container_diameter_cm is not None
+            and calibration is not None
+        )
+
+        if (calibration is None or prior.liquid) and not can_calculate_bowl and not can_calculate_box:
             uncertainty = prior.relative_uncertainty + (1.0 - mask_confidence) * 0.15
             weight = float(np.clip(prior.default_mass_g, prior.min_mass_g, prior.max_mass_g))
             lower_g = max(0.0, weight * (1.0 - uncertainty))
@@ -116,9 +136,78 @@ class PortionEstimator:
                 },
             )
 
+        # --- Box (Hộp): Calculate volume from actual physical dimensions ---
+        if can_calculate_box:
+            # Box depth is fixed at 4.5 cm (standard takeout box)
+            depth_cm = 4.5
+            # Use actual input dimensions directly — no camera pixel math needed
+            volume_cm3 = container_length_cm * container_width_cm * depth_cm
+            raw_weight = volume_cm3 * 1.0  # liquid density ≈ 1.0 g/cm3
+            method = "box_lwh_x_liquid_density"
+            assumptions_list = [
+                f"Box dimensions: {container_length_cm:.1f} cm x {container_width_cm:.1f} cm.",
+                f"Assumed box depth: {depth_cm:.2f} cm (takeout box standard).",
+                "Assumed liquid density: 1.00 g/cm3.",
+            ]
+            area_cm2 = container_length_cm * container_width_cm
+            weight = float(np.clip(raw_weight, prior.min_mass_g, prior.max_mass_g))
+            uncertainty = 0.20 + (1.0 - mask_confidence) * 0.10
+            confidence = max(0.15, min(0.75 * mask_confidence, 0.90))
+            lower_g = max(0.0, weight * (1.0 - uncertainty))
+            upper_g = weight * (1.0 + uncertainty)
+            return PortionEstimate(
+                weight_g=weight,
+                lower_g=lower_g,
+                upper_g=upper_g,
+                method=method,
+                confidence=confidence,
+                area_px=area_px,
+                area_cm2=area_cm2,
+                volume_cm3=volume_cm3,
+                assumptions=tuple(assumptions_list),
+                calculation={
+                    "model": "box_volume_from_dimensions",
+                    "is_depth_measured": False,
+                    "formula": "weight_g = length_cm * width_cm * depth_cm * liquid_density",
+                    "inputs": {
+                        "container_length_cm": container_length_cm,
+                        "container_width_cm": container_width_cm,
+                        "assumed_depth_cm": depth_cm,
+                        "liquid_density_g_per_cm3": 1.0,
+                    },
+                    "outputs": {
+                        "volume_cm3": round(volume_cm3, 4),
+                        "estimated_weight_g": round(weight, 4),
+                        "lower_g": round(lower_g, 4),
+                        "upper_g": round(upper_g, 4),
+                    },
+                },
+            )
+
         area_cm2 = area_px * calibration.cm_per_pixel**2
-        volume_cm3 = area_cm2 * prior.thickness_cm
-        raw_weight = volume_cm3 * prior.density_g_cm3
+        # --- Round containers (Tô / Chén): Calculate depth from diameter ---
+        if can_calculate_bowl:
+            # Assume depth is 1/3 of the diameter for a bowl/cup
+            depth_cm = container_diameter_cm / 3.0
+            volume_cm3 = area_cm2 * depth_cm
+            # Liquid soup typically has density close to 1.0
+            raw_weight = volume_cm3 * 1.0
+            method = "mask_area_x_bowl_depth_x_liquid_density"
+            assumptions_list = [
+                f"Assumed bowl depth: {depth_cm:.2f} cm (diameter/3).",
+                "Assumed liquid density: 1.00 g/cm3.",
+                "Perspective error should be minimized with a near top-down photo.",
+            ]
+        else:
+            volume_cm3 = area_cm2 * prior.thickness_cm
+            raw_weight = volume_cm3 * prior.density_g_cm3
+            method = "mask_area_x_thickness_x_density"
+            assumptions_list = [
+                f"Assumed effective thickness: {prior.thickness_cm:.2f} cm.",
+                f"Assumed density: {prior.density_g_cm3:.2f} g/cm3.",
+                "Perspective error should be minimized with a near top-down photo.",
+            ]
+            
         weight = float(np.clip(raw_weight, prior.min_mass_g, prior.max_mass_g))
         uncertainty = prior.geometry_uncertainty + (1.0 - calibration.confidence) * 0.20
         uncertainty += (1.0 - mask_confidence) * 0.15
@@ -129,16 +218,12 @@ class PortionEstimator:
             weight_g=weight,
             lower_g=lower_g,
             upper_g=upper_g,
-            method="mask_area_x_thickness_x_density",
+            method=method,
             confidence=max(0.15, min(confidence, 0.90)),
             area_px=area_px,
             area_cm2=area_cm2,
             volume_cm3=volume_cm3,
-            assumptions=(
-                f"Assumed effective thickness: {prior.thickness_cm:.2f} cm.",
-                f"Assumed density: {prior.density_g_cm3:.2f} g/cm3.",
-                "Perspective error should be minimized with a near top-down photo.",
-            ),
+            assumptions=tuple(assumptions_list),
             calculation={
                 "model": "mask_area_x_assumed_thickness_x_density",
                 "is_depth_measured": False,

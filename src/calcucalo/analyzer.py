@@ -37,6 +37,9 @@ class FoodImageAnalyzer:
         source: ImageInput,
         *,
         plate_diameter_cm: float | None = None,
+        container_type: str | None = None,
+        container_length_cm: float | None = None,
+        container_width_cm: float | None = None,
         cm_per_pixel: float | None = None,
     ) -> AnalysisResult:
         image = load_rgb_image(source)
@@ -87,6 +90,10 @@ class FoodImageAnalyzer:
                 mask,
                 calibration,
                 mask_confidence=quality,
+                container_type=container_type,
+                container_diameter_cm=plate_diameter_cm,
+                container_length_cm=container_length_cm,
+                container_width_cm=container_width_cm,
             )
             portion = self._apply_recipe_portion(detection.label, portion)
             items.append(
