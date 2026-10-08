@@ -136,7 +136,7 @@ class NutritionCatalog:
             return None
         base_portion = float(profile["base_portion_g"])
         # A generic uncalibrated mass prior is weaker than the recipe-specific base portion.
-        if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
+        if estimated_portion_g is None:
             estimated_portion = base_portion
         else:
             estimated_portion = max(float(estimated_portion_g), 1.0)
@@ -354,7 +354,7 @@ class NutritionDB:
                 return None
                 
             base_portion = sum(float(r["default_g"]) for r in rows)
-            if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
+            if estimated_portion_g is None:
                 estimated_portion = base_portion
             else:
                 estimated_portion = max(float(estimated_portion_g), 1.0)

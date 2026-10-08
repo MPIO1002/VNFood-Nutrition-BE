@@ -1,119 +1,108 @@
-# Heuristic starting points only. Replace with measurements from weighed meals.
-# density_g_cm3 and thickness_cm are used only when a metric image scale exists.
-# default_mass_g is used when a single RGB image has no scale reference.
+# Nguồn tham khảo (Citations):
+# - "Bảng thành phần thực phẩm Việt Nam" (Vietnamese Food Composition Table) - Viện Dinh Dưỡng Quốc Gia (NIN).
+# - Bảng định lượng suất ăn tiêu chuẩn của Bộ Y tế & các nguồn dinh dưỡng uy tín (nhathuoclongchau, vinmec).
+# - Trọng lượng một bát phở/bún tiêu chuẩn: ~500g - 600g (Bánh: 150g, Thịt: 80g, Nước: 300g).
+# - Trọng lượng một đĩa cơm tấm thập cẩm tiêu chuẩn: ~350g (Cơm: 150g, Sườn: 70g, Bì chả/Trứng: 50g, Rau/Mỡ hành: 80g).
+# - Trọng lượng bánh mì thịt tiêu chuẩn: ~150g - 180g.
+
 defaults:
-  density_g_cm3: 0.90
-  thickness_cm: 2.0
-  default_mass_g: 180
-  relative_uncertainty: 0.50
-  geometry_uncertainty: 0.30
+  default_mass_g: 200
+  relative_uncertainty: 0.5
   min_mass_g: 10
-  max_mass_g: 1200
-
+  max_mass_g: 1500
+  expected_fill_ratio: 0.7
+  fill_ratio_uncertainty: 0.25
 liquid_classes:
-  - Banh canh
-  - Bo kho
-  - Bun bo Hue
-  - Bun mam
-  - Bun rieu
-  - Canh
-  - Hu tieu
-  - Kho qua thit
-  - Lau
-  - Pho
-  - Bun cha ca
-  - Chao long
-  - Sup cua
-
+- Banh canh
+- Bo kho
+- Bun bo Hue
+- Bun mam
+- Bun rieu
+- Canh
+- Hu tieu
+- Kho qua thit
+- Lau
+- Pho
+- Bun cha ca
+- Chao long
+- Sup cua
 foods:
   Banh canh:
     default_mass_g: 550
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Bo kho:
     default_mass_g: 450
     relative_uncertainty: 0.45
   Bun bo Hue:
     default_mass_g: 600
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Bun mam:
     default_mass_g: 600
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Bun rieu:
     default_mass_g: 550
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Canh:
     default_mass_g: 300
-    relative_uncertainty: 0.50
+    relative_uncertainty: 0.5
   Hu tieu:
     default_mass_g: 550
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Kho qua thit:
     default_mass_g: 400
     relative_uncertainty: 0.45
   Lau:
     default_mass_g: 900
     relative_uncertainty: 0.55
+    expected_fill_ratio: 0.8
   Bun cha ca:
     default_mass_g: 550
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Chao long:
     default_mass_g: 500
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.65
   Sup cua:
     default_mass_g: 300
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
   Com:
-    density_g_cm3: 0.72
-    thickness_cm: 2.8
-    default_mass_g: 180
+    default_mass_g: 300
+    expected_fill_ratio: 0.65
   Com tam:
-    density_g_cm3: 0.72
-    thickness_cm: 2.8
-    default_mass_g: 200
+    default_mass_g: 350
+    expected_fill_ratio: 0.65
   Bun:
-    density_g_cm3: 0.65
-    thickness_cm: 2.6
-    default_mass_g: 180
+    default_mass_g: 300
   Dau hu:
-    density_g_cm3: 0.95
-    thickness_cm: 2.2
     default_mass_g: 100
   Xoi:
-    density_g_cm3: 0.80
-    thickness_cm: 3.0
-    default_mass_g: 200
+    default_mass_g: 250
+    expected_fill_ratio: 0.65
   Pho:
     default_mass_g: 550
-    relative_uncertainty: 0.40
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.8
   Banh mi:
-    density_g_cm3: 0.35
-    thickness_cm: 5.0
     default_mass_g: 180
   Thit bo:
-    density_g_cm3: 1.02
-    thickness_cm: 1.8
     default_mass_g: 120
   Thit ga:
-    density_g_cm3: 1.04
-    thickness_cm: 2.2
     default_mass_g: 140
   Thit heo:
-    density_g_cm3: 1.03
-    thickness_cm: 2.0
     default_mass_g: 120
   Tom:
-    density_g_cm3: 1.02
-    thickness_cm: 1.5
     default_mass_g: 100
   Rau:
-    density_g_cm3: 0.35
-    thickness_cm: 2.5
-    default_mass_g: 100
-  Salad:
-    density_g_cm3: 0.30
-    thickness_cm: 3.0
     default_mass_g: 150
+    expected_fill_ratio: 0.55
+  Salad:
+    default_mass_g: 150
+    expected_fill_ratio: 0.55
   Trung:
-    density_g_cm3: 1.03
-    thickness_cm: 1.5
     default_mass_g: 55
