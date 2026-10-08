@@ -37,6 +37,9 @@ class FoodImageAnalyzer:
         source: ImageInput,
         *,
         plate_diameter_cm: float | None = None,
+        container_type: str | None = None,
+        container_length_cm: float | None = None,
+        container_width_cm: float | None = None,
         cm_per_pixel: float | None = None,
     ) -> AnalysisResult:
         image = load_rgb_image(source)
@@ -54,6 +57,7 @@ class FoodImageAnalyzer:
             for recommendation in image_quality["recommendations"]
             if image_quality["issues"] and recommendation
         ]
+        plate_area_px = None
         if cm_per_pixel is not None:
             calibration = manual_scale(cm_per_pixel)
         elif plate_diameter_cm is not None:
@@ -62,10 +66,15 @@ class FoodImageAnalyzer:
                 warnings.append(
                     "Không tìm thấy đường tròn của đĩa/bát; khối lượng đang dùng khẩu phần mặc định."
                 )
+            else:
+                plate_area_px = 3.14159 * (calibration.reference["circle_xy_radius_px"][2])**2
         else:
+            circle_result = self.plate_scale_estimator.detect_container_circle(image)
+            if circle_result:
+                plate_area_px = 3.14159 * circle_result[0][2]**2
+            
             warnings.append(
-                "Ảnh không có tỷ lệ mét; khối lượng chỉ là khẩu phần mặc định. "
-                "Hãy gửi cm_per_pixel hoặc plate_diameter_cm để ước lượng hình học."
+                "Ảnh không có tỷ lệ mét; sử dụng phương pháp tỷ lệ lắp đầy (fill-ratio)."
             )
 
         missing = [detection for detection in detections if detection.mask is None]
@@ -87,6 +96,11 @@ class FoodImageAnalyzer:
                 mask,
                 calibration,
                 mask_confidence=quality,
+                container_type=container_type,
+                container_diameter_cm=plate_diameter_cm,
+                container_length_cm=container_length_cm,
+                container_width_cm=container_width_cm,
+                plate_area_px=plate_area_px,
             )
             portion = self._apply_recipe_portion(detection.label, portion)
             items.append(
@@ -119,52 +133,7 @@ class FoodImageAnalyzer:
         label: str,
         portion: PortionEstimate,
     ) -> PortionEstimate:
-        if self.nutrition_catalog is None or portion.method == "mask_area_x_thickness_x_density":
-            return portion
-        base_portion = self.nutrition_catalog.base_portion_for(label)
-        if base_portion is None or portion.weight_g <= 0:
-            return portion
-        lower_ratio = portion.lower_g / portion.weight_g
-        upper_ratio = portion.upper_g / portion.weight_g
-        lower_g = base_portion * lower_ratio
-        upper_g = base_portion * upper_ratio
-        return PortionEstimate(
-            weight_g=base_portion,
-            lower_g=lower_g,
-            upper_g=upper_g,
-            method="recipe_base_portion_prior",
-            confidence=portion.confidence,
-            area_px=portion.area_px,
-            assumptions=(
-                *portion.assumptions,
-                "Khối lượng dùng khẩu phần cơ sở của công thức vì ảnh chưa có tỷ lệ mét.",
-            ),
-            calculation={
-                "model": "recipe_base_portion_prior",
-                "is_depth_measured": False,
-                "formula": "estimated_weight_g = recipe_base_portion_g",
-                "range_formula": "range_g = recipe_base_portion_g * source_range_ratio",
-                "inputs": {
-                    "recipe_base_portion_g": round(base_portion, 4),
-                    "source_method": portion.method,
-                    "source_weight_g": round(portion.weight_g, 4),
-                    "source_lower_g": round(portion.lower_g, 4),
-                    "source_upper_g": round(portion.upper_g, 4),
-                },
-                "intermediate": {
-                    "lower_ratio": round(lower_ratio, 6),
-                    "upper_ratio": round(upper_ratio, 6),
-                },
-                "outputs": {
-                    "estimated_weight_g": round(base_portion, 4),
-                    "lower_g": round(lower_g, 4),
-                    "upper_g": round(upper_g, 4),
-                },
-                "limitations": [
-                    "The recipe portion is a catalog prior and was not measured from the image."
-                ],
-            },
-        )
+        return portion
 
     def _attach_nutrition(
         self,

@@ -163,13 +163,8 @@ def get_analyzer() -> FoodImageAnalyzer:
         device=device,
     )
     segmenter = create_segmenter(segmenter_name, sam_model=sam_model, device=device)
-    catalog = os.getenv(
-        "CALCUCALO_FOOD_CATALOG",
-        str(PROJECT_ROOT / "configs" / "food_catalog.json"),
-    )
-    fallback_catalog = NutritionCatalog(catalog)
     db_config_path = PROJECT_ROOT / "configs" / "db_config.yaml"
-    nutrition_db = NutritionDB(db_config_path, fallback_catalog)
+    nutrition_db = NutritionDB(db_config_path)
     return FoodImageAnalyzer(
         detector,
         segmenter,
@@ -224,10 +219,30 @@ def model_info() -> dict[str, object]:
 async def analyze_food(
     image: Annotated[UploadFile, File()],
     plate_diameter_cm: Annotated[float | None, Form()] = None,
+    container_type: Annotated[str | None, Form()] = None,
+    container_diameter_cm: Annotated[float | None, Form()] = None,
+    container_length_cm: Annotated[float | None, Form()] = None,
+    container_width_cm: Annotated[float | None, Form()] = None,
     cm_per_pixel: Annotated[float | None, Form()] = None,
     response_format: Annotated[str, Form()] = "full",
 ) -> dict[str, object]:
-    if plate_diameter_cm is not None and cm_per_pixel is not None:
+    # Fallback for backward compatibility
+    if container_diameter_cm is None and plate_diameter_cm is not None:
+        container_diameter_cm = plate_diameter_cm
+        if container_type is None:
+            container_type = "dia"  # Default to plate if using legacy parameter
+
+    # Validate: box needs length+width, round containers need diameter
+    if container_type == "hop":
+        if container_length_cm is None or container_width_cm is None:
+            raise HTTPException(
+                status_code=422,
+                detail="container_type='hop' yêu cầu phải có container_length_cm và container_width_cm.",
+            )
+    elif container_type in {"to", "chen", "dia"} and container_diameter_cm is None and plate_diameter_cm is not None:
+        container_diameter_cm = plate_diameter_cm
+
+    if container_diameter_cm is not None and cm_per_pixel is not None:
         raise HTTPException(status_code=422, detail="Use only one scale calibration method")
     if response_format not in {"full", "nutrition"}:
         raise HTTPException(status_code=422, detail="response_format must be full or nutrition")
@@ -240,7 +255,10 @@ async def analyze_food(
         analyzer = get_analyzer()
         result = analyzer.analyze(
             payload,
-            plate_diameter_cm=plate_diameter_cm,
+            plate_diameter_cm=container_diameter_cm,
+            container_type=container_type,
+            container_length_cm=container_length_cm,
+            container_width_cm=container_width_cm,
             cm_per_pixel=cm_per_pixel,
         )
     except (UnidentifiedImageError, ValueError) as exc:

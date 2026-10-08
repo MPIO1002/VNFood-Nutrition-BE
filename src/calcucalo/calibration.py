@@ -9,10 +9,8 @@ from .domain import ScaleCalibration
 class PlateScaleEstimator:
     """Estimate metric scale from a near-circular plate of known diameter."""
 
-    def estimate(self, image_rgb: np.ndarray, plate_diameter_cm: float) -> ScaleCalibration | None:
-        if plate_diameter_cm <= 0:
-            raise ValueError("plate_diameter_cm must be positive")
 
+    def _detect_best_circle(self, image_rgb: np.ndarray) -> tuple[tuple[float, float, float], float] | None:
         height, width = image_rgb.shape[:2]
         shortest = min(height, width)
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
@@ -45,6 +43,21 @@ class PlateScaleEstimator:
 
         center_distance = np.hypot(x - center_x, y - center_y) / max(shortest, 1)
         confidence = float(np.clip(0.85 - center_distance, 0.35, 0.85))
+        return (x, y, radius), confidence
+
+    def detect_container_circle(self, image_rgb: np.ndarray) -> tuple[tuple[float, float, float], float] | None:
+        return self._detect_best_circle(image_rgb)
+
+    def estimate(self, image_rgb: np.ndarray, plate_diameter_cm: float) -> ScaleCalibration | None:
+        if plate_diameter_cm <= 0:
+            raise ValueError("plate_diameter_cm must be positive")
+            
+        result = self._detect_best_circle(image_rgb)
+        if result is None:
+            return None
+            
+        (x, y, radius), confidence = result
+        diameter_px = 2.0 * radius
         return ScaleCalibration(
             cm_per_pixel=plate_diameter_cm / diameter_px,
             method="detected_plate",

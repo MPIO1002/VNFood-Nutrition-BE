@@ -136,7 +136,7 @@ class NutritionCatalog:
             return None
         base_portion = float(profile["base_portion_g"])
         # A generic uncalibrated mass prior is weaker than the recipe-specific base portion.
-        if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
+        if estimated_portion_g is None:
             estimated_portion = base_portion
         else:
             estimated_portion = max(float(estimated_portion_g), 1.0)
@@ -231,8 +231,7 @@ class NutritionCatalog:
         }
 
 class NutritionDB:
-    def __init__(self, config_path: str | Path, fallback_catalog: NutritionCatalog):
-        self.fallback = fallback_catalog
+    def __init__(self, config_path: str | Path):
         self.config_path = Path(config_path)
         self.db_config = None
         self._dish_map = {}
@@ -279,13 +278,13 @@ class NutritionDB:
     def base_portion_for(self, label: str) -> float | None:
         import os
         if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
-            return self.fallback.base_portion_for(label)
+            return None
             
         normalized_label = normalize_food_name(label)
         db_dish_name = self._dish_map.get(normalized_label)
         
         if not db_dish_name:
-            return self.fallback.base_portion_for(label)
+            return None
 
         try:
             import psycopg2
@@ -307,7 +306,7 @@ class NutritionDB:
             import logging
             logging.warning(f"Error getting base portion for {label}: {e}")
             
-        return self.fallback.base_portion_for(label)
+        return None
 
     def analyze(
         self,
@@ -318,14 +317,13 @@ class NutritionDB:
     ) -> dict[str, Any] | None:
         import os
         if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
-            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+            return None
             
         normalized_label = normalize_food_name(label)
         db_dish_name = self._dish_map.get(normalized_label)
         
         if not db_dish_name:
-            # Fallback
-            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+            return None
 
         try:
             conn = self._get_conn()
@@ -353,10 +351,10 @@ class NutritionDB:
             conn.close()
             
             if not rows:
-                return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+                return None
                 
             base_portion = sum(float(r["default_g"]) for r in rows)
-            if estimated_portion_g is None or portion_method != "mask_area_x_thickness_x_density":
+            if estimated_portion_g is None:
                 estimated_portion = base_portion
             else:
                 estimated_portion = max(float(estimated_portion_g), 1.0)
@@ -438,7 +436,7 @@ class NutritionDB:
             }
         except Exception as e:
             logging.error(f"DB Error for dish {db_dish_name}: {e}")
-            return self.fallback.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method)
+            return None
 
     @staticmethod
     def compact(food: dict[str, Any]) -> dict[str, Any]:

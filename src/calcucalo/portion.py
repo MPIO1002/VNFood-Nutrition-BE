@@ -13,14 +13,23 @@ from .domain import PortionEstimate, ScaleCalibration
 
 @dataclass(frozen=True)
 class FoodPrior:
-    density_g_cm3: float
-    thickness_cm: float
     default_mass_g: float
     relative_uncertainty: float
-    geometry_uncertainty: float
     min_mass_g: float
     max_mass_g: float
+    expected_fill_ratio: float
+    fill_ratio_uncertainty: float
     liquid: bool = False
+
+CONTAINER_SCALE = {
+    "chen": 0.36,       # ~200g / 550g
+    "to": 1.0,          # ~550g
+    "to_lon": 1.36,     # ~750g
+    "dia_nho": 0.6,
+    "dia": 1.0,
+    "dia_lon": 1.35,
+    "hop": 0.8
+}
 
 
 class PortionEstimator:
@@ -44,13 +53,12 @@ class PortionEstimator:
         values = dict(self.defaults)
         values.update(self._food_lookup.get(self._key(label), {}))
         return FoodPrior(
-            density_g_cm3=float(values.get("density_g_cm3", 0.9)),
-            thickness_cm=float(values.get("thickness_cm", 2.0)),
             default_mass_g=float(values.get("default_mass_g", 180.0)),
             relative_uncertainty=float(values.get("relative_uncertainty", 0.5)),
-            geometry_uncertainty=float(values.get("geometry_uncertainty", 0.3)),
             min_mass_g=float(values.get("min_mass_g", 10.0)),
             max_mass_g=float(values.get("max_mass_g", 1200.0)),
+            expected_fill_ratio=float(values.get("expected_fill_ratio", 0.70)),
+            fill_ratio_uncertainty=float(values.get("fill_ratio_uncertainty", 0.25)),
             liquid=self._key(label) in self.liquid_classes,
         )
 
@@ -60,129 +68,111 @@ class PortionEstimator:
         mask: np.ndarray,
         calibration: ScaleCalibration | None,
         mask_confidence: float = 1.0,
+        container_type: str | None = None,
+        container_diameter_cm: float | None = None,
+        container_length_cm: float | None = None,
+        container_width_cm: float | None = None,
+        plate_area_px: float | None = None,
     ) -> PortionEstimate:
         prior = self.prior_for(label)
         area_px = int(np.count_nonzero(mask))
 
         # The visible surface of soup is not its volume. Without bowl geometry or RGB-D,
         # a class serving prior is safer than pretending surface area is liquid volume.
-        if calibration is None or prior.liquid:
-            uncertainty = prior.relative_uncertainty + (1.0 - mask_confidence) * 0.15
-            weight = float(np.clip(prior.default_mass_g, prior.min_mass_g, prior.max_mass_g))
-            lower_g = max(0.0, weight * (1.0 - uncertainty))
-            upper_g = weight * (1.0 + uncertainty)
-            reason = "liquid_or_mixed_dish_prior" if prior.liquid else "single_image_serving_prior"
-            assumptions = (
-                "No metric volume is observable from one uncalibrated RGB image."
-                if calibration is None
-                else "Liquid depth is not observable from its top surface; using a serving prior."
-            )
-            return PortionEstimate(
-                weight_g=weight,
-                lower_g=lower_g,
-                upper_g=upper_g,
-                method=reason,
-                confidence=max(0.15, 0.45 * mask_confidence),
-                area_px=area_px,
-                assumptions=(assumptions, "User correction or weighed calibration is recommended."),
-                calculation={
-                    "model": "serving_mass_prior",
-                    "is_depth_measured": False,
-                    "formula": "weight_g = clip(default_mass_g, min_mass_g, max_mass_g)",
-                    "range_formula": (
-                        "range_g = weight_g * (1 +/- effective_relative_uncertainty)"
-                    ),
-                    "inputs": {
-                        "mask_area_px": area_px,
-                        "mask_confidence": round(mask_confidence, 6),
-                        "default_mass_g": round(prior.default_mass_g, 4),
-                        "min_mass_g": round(prior.min_mass_g, 4),
-                        "max_mass_g": round(prior.max_mass_g, 4),
-                        "base_relative_uncertainty": round(prior.relative_uncertainty, 6),
-                        "metric_scale_available": calibration is not None,
-                        "liquid_or_mixed_dish": prior.liquid,
-                    },
-                    "intermediate": {
-                        "mask_uncertainty_addition": round(
-                            (1.0 - mask_confidence) * 0.15, 6
-                        ),
-                        "effective_relative_uncertainty": round(uncertainty, 6),
-                    },
-                    "outputs": {
-                        "estimated_weight_g": round(weight, 4),
-                        "lower_g": round(lower_g, 4),
-                        "upper_g": round(upper_g, 4),
-                    },
-                },
-            )
+        # EXCEPT when we know the container is a bowl and have its diameter.
+        # For box type: can calculate if we have length and width (no calibration needed)
+        can_calculate_box = (
+            prior.liquid
+            and container_type == "hop"
+            and container_length_cm is not None
+            and container_width_cm is not None
+        )
+        # For round containers: need calibration + diameter
+        can_calculate_bowl = (
+            prior.liquid
+            and container_type in ["to", "chen"]
+            and container_diameter_cm is not None
+            and calibration is not None
+        )
 
-        area_cm2 = area_px * calibration.cm_per_pixel**2
-        volume_cm3 = area_cm2 * prior.thickness_cm
-        raw_weight = volume_cm3 * prior.density_g_cm3
+        # --- No calibration: Use Fill-Ratio or Serving Prior ---
+        # Get base mass scaled by container type if selected
+        container_scale = CONTAINER_SCALE.get(container_type, 1.0) if container_type else 1.0
+        base_mass = prior.default_mass_g * container_scale
+
+        if plate_area_px and plate_area_px > 0:
+            fill_ratio = area_px / plate_area_px
+            # Clamp fill ratio to reasonable bounds to prevent outliers
+            fill_ratio = max(0.1, min(fill_ratio, 1.5))
+            portion_scale = fill_ratio / prior.expected_fill_ratio
+            raw_weight = base_mass * portion_scale
+            method = "fill_ratio_scaled_prior"
+            uncertainty = prior.fill_ratio_uncertainty + (1.0 - mask_confidence) * 0.15
+            assumptions_list = [
+                f"No metric volume observable. Using fill ratio: {fill_ratio:.2f}.",
+                f"Expected fill ratio: {prior.expected_fill_ratio:.2f}.",
+                f"Container scale factor: {container_scale:.2f}."
+            ]
+            calculation = {
+                "model": "fill_ratio_scaled_prior",
+                "is_depth_measured": False,
+                "formula": "weight_g = default_mass_g * container_scale * (fill_ratio / expected_fill_ratio)",
+                "inputs": {
+                    "mask_area_px": area_px,
+                    "plate_area_px": round(plate_area_px, 2),
+                    "default_mass_g": prior.default_mass_g,
+                    "container_scale": container_scale,
+                    "expected_fill_ratio": prior.expected_fill_ratio,
+                },
+                "intermediate": {
+                    "fill_ratio": round(fill_ratio, 4),
+                    "portion_scale": round(portion_scale, 4),
+                },
+                "outputs": {
+                    "estimated_weight_g": round(raw_weight, 4),
+                },
+            }
+        else:
+            raw_weight = base_mass
+            method = "serving_mass_prior"
+            uncertainty = prior.relative_uncertainty + (1.0 - mask_confidence) * 0.15
+            assumptions_list = [
+                "No metric volume observable.",
+                "No plate circle detected for fill-ratio.",
+                f"Container scale factor: {container_scale:.2f}."
+            ]
+            calculation = {
+                "model": "serving_mass_prior",
+                "is_depth_measured": False,
+                "formula": "weight_g = default_mass_g * container_scale",
+                "inputs": {
+                    "default_mass_g": prior.default_mass_g,
+                    "container_scale": container_scale,
+                },
+                "outputs": {
+                    "estimated_weight_g": round(raw_weight, 4),
+                },
+            }
+
         weight = float(np.clip(raw_weight, prior.min_mass_g, prior.max_mass_g))
-        uncertainty = prior.geometry_uncertainty + (1.0 - calibration.confidence) * 0.20
-        uncertainty += (1.0 - mask_confidence) * 0.15
-        confidence = 0.78 * calibration.confidence * mask_confidence
+        confidence = max(0.15, 0.60 * mask_confidence)
         lower_g = max(0.0, weight * (1.0 - uncertainty))
         upper_g = weight * (1.0 + uncertainty)
+
+        # Update calculation outputs with clamped values
+        calculation["outputs"].update({
+            "estimated_weight_g": round(weight, 4),
+            "lower_g": round(lower_g, 4),
+            "upper_g": round(upper_g, 4),
+        })
+
         return PortionEstimate(
             weight_g=weight,
             lower_g=lower_g,
             upper_g=upper_g,
-            method="mask_area_x_thickness_x_density",
-            confidence=max(0.15, min(confidence, 0.90)),
+            method=method,
+            confidence=confidence,
             area_px=area_px,
-            area_cm2=area_cm2,
-            volume_cm3=volume_cm3,
-            assumptions=(
-                f"Assumed effective thickness: {prior.thickness_cm:.2f} cm.",
-                f"Assumed density: {prior.density_g_cm3:.2f} g/cm3.",
-                "Perspective error should be minimized with a near top-down photo.",
-            ),
-            calculation={
-                "model": "mask_area_x_assumed_thickness_x_density",
-                "is_depth_measured": False,
-                "formulas": [
-                    "area_cm2 = mask_area_px * cm_per_pixel^2",
-                    "volume_cm3 = area_cm2 * assumed_thickness_cm",
-                    "raw_weight_g = volume_cm3 * assumed_density_g_cm3",
-                    "estimated_weight_g = clip(raw_weight_g, min_mass_g, max_mass_g)",
-                    "range_g = estimated_weight_g * (1 +/- effective_relative_uncertainty)",
-                ],
-                "inputs": {
-                    "mask_area_px": area_px,
-                    "mask_confidence": round(mask_confidence, 6),
-                    "cm_per_pixel": round(calibration.cm_per_pixel, 8),
-                    "calibration_method": calibration.method,
-                    "calibration_confidence": round(calibration.confidence, 6),
-                    "assumed_thickness_cm": round(prior.thickness_cm, 6),
-                    "assumed_density_g_cm3": round(prior.density_g_cm3, 6),
-                    "min_mass_g": round(prior.min_mass_g, 4),
-                    "max_mass_g": round(prior.max_mass_g, 4),
-                    "base_geometry_uncertainty": round(prior.geometry_uncertainty, 6),
-                },
-                "intermediate": {
-                    "area_cm2": round(area_cm2, 6),
-                    "volume_cm3": round(volume_cm3, 6),
-                    "raw_weight_g": round(raw_weight, 6),
-                    "weight_was_clamped": not np.isclose(raw_weight, weight),
-                    "calibration_uncertainty_addition": round(
-                        (1.0 - calibration.confidence) * 0.20, 6
-                    ),
-                    "mask_uncertainty_addition": round(
-                        (1.0 - mask_confidence) * 0.15, 6
-                    ),
-                    "effective_relative_uncertainty": round(uncertainty, 6),
-                },
-                "outputs": {
-                    "estimated_weight_g": round(weight, 4),
-                    "lower_g": round(lower_g, 4),
-                    "upper_g": round(upper_g, 4),
-                    "confidence": round(max(0.15, min(confidence, 0.90)), 6),
-                },
-                "limitations": [
-                    "Thickness is a class prior, not depth measured from the image.",
-                    "Perspective correction is not applied; a near top-down image is required.",
-                ],
-            },
+            assumptions=tuple(assumptions_list),
+            calculation=calculation,
         )
