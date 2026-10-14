@@ -26,6 +26,47 @@ Requirements: Python 3.10-3.12.
    uvicorn calcucalo.api:app --host 0.0.0.0 --port 8000
    ```
 
+## Database and JWT authentication
+
+Copy `.env.example` to `.env` and set the Neon PostgreSQL URL and a random JWT secret. The
+real `.env` file is ignored by Git.
+
+```powershell
+Copy-Item .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Put the generated value in `JWT_SECRET_KEY`, then initialize the authentication tables:
+
+```powershell
+python scripts/init_auth_db.py
+```
+
+Authentication endpoints:
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+- `POST /api/v1/auth/logout-all` (Bearer access token required)
+- `GET /api/v1/auth/me` (Bearer access token required)
+- `GET /api/v1/auth/health`
+
+Register or log in with JSON:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "a-strong-password",
+  "full_name": "Example User"
+}
+```
+
+The response contains a short-lived access token and a rotating refresh token. Send the access
+token as `Authorization: Bearer <access_token>`. Refresh and logout requests use JSON containing
+`{"refresh_token": "<refresh_token>"}`. Refresh tokens are stored only as SHA-256 hashes and are
+revoked when rotated or logged out.
+
 ## API Usage
 
 The main endpoint is `POST /api/v1/food/analyze`. It accepts an image and a user-selected container type.

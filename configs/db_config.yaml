@@ -1,7 +1,8 @@
 # Tệp này không còn chứa mật khẩu, thay vào đó hãy lưu trong file .env
-# Mọi kết nối Database sẽ ưu tiên lấy biến DATABASE_URL từ file .env
-host: "localhost"
+# Mọi kết nối Database ưu tiên lấy DATABASE_URL từ file .env.
+# Các giá trị dưới đây chỉ là fallback không chứa bí mật.
+host: "ep-curly-brook-b36c1aca-pooler.c-4.ap-southeast-1.aws.neon.tech"
 port: 5432
-user: ""
+user: "nutrition_db_owner"
 password: ""
-database: ""
+database: "nutrition_db"
