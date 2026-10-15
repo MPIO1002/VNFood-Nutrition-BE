@@ -9,7 +9,9 @@ from typing import Annotated
 import cv2
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import UnidentifiedImageError
 
 from ..core.database import database_is_configured
@@ -22,6 +24,7 @@ from ..services.visualize import render_overlay
 from .auth import router as auth_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+FRONTEND_ROOT = PROJECT_ROOT.parent / "frontend"
 load_dotenv(PROJECT_ROOT / ".env")
 
 EXPECTED_CLASS_COUNT = 68
@@ -295,3 +298,18 @@ async def analyze_food(
         out["visual_base64"] = visual_base64
 
     return out
+
+
+@app.get("/", include_in_schema=False)
+def root() -> Response:
+    if FRONTEND_ROOT.is_dir():
+        return RedirectResponse(url="/test-ui/")
+    return JSONResponse({"name": app.title, "status": "ok", "docs": "/docs"})
+
+
+if FRONTEND_ROOT.is_dir():
+    app.mount(
+        "/test-ui",
+        StaticFiles(directory=FRONTEND_ROOT, html=True),
+        name="test-ui",
+    )

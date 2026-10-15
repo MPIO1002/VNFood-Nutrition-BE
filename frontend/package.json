@@ -2,5 +2,8 @@
   "name": "vnfood-nutrition-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "Frontend workspace for VNFood Nutrition"
+  "description": "Local test console for the VNFood Nutrition backend",
+  "scripts": {
+    "check": "node --check src/app.js"
+  }
 }

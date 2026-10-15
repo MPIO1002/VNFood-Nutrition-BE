@@ -5,9 +5,20 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
+from fastapi.testclient import TestClient
+
 from calcucalo.api.app import _model_path, _model_readiness
 
 api_module = importlib.import_module("calcucalo.api.app")
+
+
+def test_root_redirects_to_test_ui() -> None:
+    client = TestClient(api_module.app)
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/test-ui/"
 
 def test_model_path_finds_checkpoint_inside_training_run(tmp_path, monkeypatch) -> None:
     checkpoint = tmp_path / "vietfood67_yolo11n_v1" / "weights" / "best.pt"

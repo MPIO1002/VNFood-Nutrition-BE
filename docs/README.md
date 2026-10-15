@@ -156,6 +156,15 @@ Mở Swagger UI tại:
 http://127.0.0.1:8000/docs
 ```
 
+Hoặc mở giao diện kiểm thử trực quan tại:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Giao diện hỗ trợ health check, đăng ký, đăng nhập, `/me`, refresh, logout, logout-all và gửi
+ảnh tới food analysis API. Access/refresh token chỉ được lưu trong `sessionStorage` của tab hiện tại.
+
 Kiểm tra auth service và database:
 
 ```powershell

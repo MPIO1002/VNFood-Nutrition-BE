@@ -63,6 +63,7 @@ uvicorn calcucalo.api.app:app --reload --host 127.0.0.1 --port 8000
 
 Các URL hữu ích:
 
+- Test console: <http://127.0.0.1:8000/> hoặc <http://127.0.0.1:8000/test-ui/>
 - Swagger UI: <http://127.0.0.1:8000/docs>
 - API health: <http://127.0.0.1:8000/health>
 - Auth/Neon health: <http://127.0.0.1:8000/api/v1/auth/health>
@@ -80,6 +81,10 @@ Backend cung cấp:
 - `GET /api/v1/auth/health`
 
 Hướng dẫn chi tiết và test thủ công nằm trong [docs/README.md](docs/README.md).
+
+Test console trong `frontend/` cho phép kiểm tra health, register, login, `/me`, refresh,
+logout, logout-all và upload ảnh phân tích trực tiếp trên trình duyệt. FastAPI phục vụ giao diện
+này cùng origin nên không cần cấu hình CORS cho môi trường local.
 
 ## Test backend
 
