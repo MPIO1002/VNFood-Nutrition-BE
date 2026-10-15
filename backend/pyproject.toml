@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calcucalo-vision"
+version = "0.5.1"
+description = "Vietnamese food detection, segmentation and portion-estimation baseline"
+readme = {text = "CalcuCalo backend for Vietnamese food analysis and nutrition tracking.", content-type = "text/markdown"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "Pillow>=10.2",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+inference = [
+    "onnxruntime>=1.18",
+    "ultralytics>=8.3",
+]
+onnx = ["onnxruntime>=1.18"]
+api = [
+    "fastapi>=0.115",
+    "bcrypt>=4.2",
+    "psycopg2-binary>=2.9",
+    "PyJWT>=2.9",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+]
+dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.6"]
+all = [
+    "onnxruntime>=1.18",
+    "ultralytics>=8.3",
+    "fastapi>=0.115",
+    "bcrypt>=4.2",
+    "psycopg2-binary>=2.9",
+    "PyJWT>=2.9",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+calcucalo = "calcucalo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Giao diện kiểm thử API, JWT và phân tích món ăn của VNFood Nutrition"
+    />
+    <title>VNFood Nutrition · Backend Test Console</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="brand-row">
+          <a class="brand" href="/test-ui/" aria-label="VNFood Nutrition">
+            <span class="brand-mark" aria-hidden="true">VN</span>
+            <span>
+              <strong>VNFood Nutrition</strong>
+              <small>Backend test console</small>
+            </span>
+          </a>
+          <div class="connection-pill" id="connection-pill" data-state="pending">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="connection-label">Đang kiểm tra API</span>
+          </div>
+        </div>
+
+        <div class="hero-copy">
+          <p class="eyebrow">CALCUCALO DEVELOPMENT TOOL</p>
+          <h1>Kiểm thử backend từ một nơi duy nhất.</h1>
+          <p>
+            Theo dõi health, thử toàn bộ vòng đời JWT và gửi ảnh tới pipeline phân tích món ăn
+            mà không cần tự viết request.
+          </p>
+        </div>
+
+        <label class="api-base-field">
+          <span>API base URL</span>
+          <input id="api-base" type="url" spellcheck="false" autocomplete="off" />
+        </label>
+      </header>
+
+      <main>
+        <section class="section" aria-labelledby="overview-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">01 · Tổng quan</p>
+              <h2 id="overview-title">Trạng thái hệ thống</h2>
+            </div>
+            <button class="button button-secondary" id="refresh-health" type="button">
+              Kiểm tra lại
+            </button>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span class="metric-icon" aria-hidden="true">API</span>
+              <div>
+                <p>FastAPI service</p>
+                <strong id="api-health">Chưa kiểm tra</strong>
+                <small id="api-health-detail">GET /health</small>
+              </div>
+            </article>
+            <article class="metric-card">
+              <span class="metric-icon metric-icon-db" aria-hidden="true">DB</span>
+              <div>
+                <p>Neon PostgreSQL</p>
+                <strong id="db-health">Chưa kiểm tra</strong>
+                <small id="db-health-detail">GET /api/v1/auth/health</small>
+              </div>
+            </article>
+            <article class="metric-card">
+              <span class="metric-icon metric-icon-user" aria-hidden="true">ID</span>
+              <div>
+                <p>Phiên đăng nhập</p>
+                <strong id="session-health">Chưa đăng nhập</strong>
+                <small id="session-health-detail">Không có access token</small>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="auth-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">02 · Authentication</p>
+              <h2 id="auth-title">Đăng ký và đăng nhập</h2>
+            </div>
+            <span class="section-note">Token chỉ lưu trong sessionStorage của tab hiện tại</span>
+          </div>
+
+          <div class="auth-grid">
+            <article class="panel">
+              <div class="panel-heading">
+                <span class="step-number">A</span>
+                <div>
+                  <h3>Tạo tài khoản</h3>
+                  <p>Test `POST /api/v1/auth/register`</p>
+                </div>
+              </div>
+              <form id="register-form" class="form-stack">
+                <label>
+                  <span>Họ tên</span>
+                  <input name="full_name" value="Manual Test User" maxlength="120" />
+                </label>
+                <label>
+                  <span>Email</span>
+                  <input name="email" type="email" required autocomplete="email" />
+                </label>
+                <label>
+                  <span>Mật khẩu</span>
+                  <input
+                    name="password"
+                    type="password"
+                    minlength="8"
+                    maxlength="72"
+                    required
+                    autocomplete="new-password"
+                  />
+                </label>
+                <button class="button button-primary" type="submit">Đăng ký và lưu token</button>
+              </form>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <span class="step-number">B</span>
+                <div>
+                  <h3>Đăng nhập</h3>
+                  <p>Test `POST /api/v1/auth/login`</p>
+                </div>
+              </div>
+              <form id="login-form" class="form-stack">
+                <label>
+                  <span>Email</span>
+                  <input name="email" type="email" required autocomplete="email" />
+                </label>
+                <label>
+                  <span>Mật khẩu</span>
+                  <input
+                    name="password"
+                    type="password"
+                    required
+                    autocomplete="current-password"
+                  />
+                </label>
+                <button class="button button-primary" type="submit">Đăng nhập</button>
+              </form>
+            </article>
+
+            <article class="panel session-panel">
+              <div class="panel-heading">
+                <span class="step-number">C</span>
+                <div>
+                  <h3>Phiên hiện tại</h3>
+                  <p>Access/refresh token lifecycle</p>
+                </div>
+              </div>
+
+              <div class="session-card" id="session-card">
+                <div class="avatar" id="session-avatar">?</div>
+                <div>
+                  <strong id="session-name">Chưa đăng nhập</strong>
+                  <span id="session-email">Hãy đăng ký hoặc đăng nhập</span>
+                </div>
+              </div>
+
+              <dl class="token-list">
+                <div>
+                  <dt>Access token</dt>
+                  <dd id="access-token-state">Chưa có</dd>
+                </div>
+                <div>
+                  <dt>Refresh token</dt>
+                  <dd id="refresh-token-state">Chưa có</dd>
+                </div>
+              </dl>
+
+              <div class="button-grid">
+                <button class="button button-secondary" id="load-me" type="button">GET /me</button>
+                <button class="button button-secondary" id="refresh-token" type="button">
+                  Refresh token
+                </button>
+                <button class="button button-secondary" id="logout" type="button">Logout</button>
+                <button class="button button-danger" id="logout-all" type="button">
+                  Logout all
+                </button>
+              </div>
+              <button class="text-button" id="clear-session" type="button">
+                Chỉ xóa token khỏi trình duyệt
+              </button>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="analyze-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">03 · Vision pipeline</p>
+              <h2 id="analyze-title">Phân tích món ăn</h2>
+            </div>
+            <a class="text-link" href="/docs" target="_blank" rel="noreferrer">Mở Swagger ↗</a>
+          </div>
+
+          <div class="analyze-layout">
+            <form id="analyze-form" class="panel form-stack">
+              <label class="file-drop" id="file-drop">
+                <input id="food-image" name="image" type="file" accept="image/*" required />
+                <span class="file-drop-icon" aria-hidden="true">+</span>
+                <strong>Chọn ảnh món ăn</strong>
+                <small id="file-name">JPEG/PNG, tối đa 15 MB</small>
+              </label>
+
+              <div class="form-row">
+                <label>
+                  <span>Loại vật chứa</span>
+                  <select id="container-type" name="container_type">
+                    <option value="dia">Đĩa</option>
+                    <option value="dia_nho">Đĩa nhỏ</option>
+                    <option value="dia_lon">Đĩa lớn</option>
+                    <option value="chen">Chén</option>
+                    <option value="to">Tô</option>
+                    <option value="to_lon">Tô lớn</option>
+                    <option value="hop">Hộp</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Định dạng kết quả</span>
+                  <select name="response_format">
+                    <option value="full">Full</option>
+                    <option value="nutrition">Nutrition only</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="form-row" id="round-fields">
+                <label>
+                  <span>Đường kính (cm)</span>
+                  <input name="container_diameter_cm" type="number" min="1" step="0.1" value="24" />
+                </label>
+                <label>
+                  <span>cm trên pixel (tùy chọn)</span>
+                  <input name="cm_per_pixel" type="number" min="0.0001" step="0.0001" />
+                </label>
+              </div>
+
+              <div class="form-row is-hidden" id="box-fields">
+                <label>
+                  <span>Chiều dài hộp (cm)</span>
+                  <input name="container_length_cm" type="number" min="1" step="0.1" value="20" />
+                </label>
+                <label>
+                  <span>Chiều rộng hộp (cm)</span>
+                  <input name="container_width_cm" type="number" min="1" step="0.1" value="14" />
+                </label>
+              </div>
+
+              <button class="button button-primary" id="analyze-button" type="submit">
+                Gửi ảnh phân tích
+              </button>
+              <p class="form-hint">
+                Endpoint cần model `best.pt` hoặc `best.onnx`. Nếu chưa có model, API sẽ trả `503`.
+              </p>
+            </form>
+
+            <article class="result-panel">
+              <div class="result-preview" id="result-preview">
+                <p>Ảnh gốc hoặc overlay sẽ xuất hiện tại đây.</p>
+                <img id="preview-image" alt="Ảnh món ăn được chọn" hidden />
+                <img id="overlay-image" alt="Kết quả nhận diện món ăn" hidden />
+              </div>
+              <div class="result-json-heading">
+                <div>
+                  <span>Kết quả JSON</span>
+                  <small id="analysis-status">Chưa có request</small>
+                </div>
+                <button class="text-button" id="copy-result" type="button">Copy JSON</button>
+              </div>
+              <pre id="analysis-result">{}</pre>
+            </article>
+          </div>
+        </section>
+
+        <section class="section log-section" aria-labelledby="log-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">04 · Request log</p>
+              <h2 id="log-title">Lịch sử thao tác</h2>
+            </div>
+            <button class="text-button" id="clear-log" type="button">Xóa log</button>
+          </div>
+          <div id="request-log" class="request-log" aria-live="polite">
+            <p class="empty-log">Request mới sẽ xuất hiện ở đây. Token luôn được che khỏi log.</p>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <span>VNFood Nutrition · local development console</span>
+        <a href="/openapi.json" target="_blank" rel="noreferrer">OpenAPI JSON ↗</a>
+      </footer>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

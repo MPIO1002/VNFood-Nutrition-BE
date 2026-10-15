@@ -1,105 +1,125 @@
-# CalcuCalo Vision Backend
+# VNFood Nutrition
 
-A Python-based AI backend for a Vietnamese food nutrition application. This repository handles the core computer vision pipeline and nutrition estimation logic, exposing a FastAPI server for mobile clients (e.g., React Native).
+Monorepo cho hệ thống nhận diện món ăn Việt Nam, ước lượng khẩu phần, tính dinh dưỡng và quản lý người dùng bằng JWT.
 
-## Core Features
+## Cấu trúc dự án
 
-1. **Object Detection**: Uses YOLO to detect 68 classes of Vietnamese food (VietFood67 dataset).
-2. **Segmentation**: Extracts polygon masks (via SAM 2 or GrabCut fallback) for mobile clients to render interactive food overlays.
-3. **Smart Portion Estimation**: Employs a **Fill-Ratio** algorithm combined with **Container Scaling**. It removes the need for physical depth sensors or manual cm measurements by calculating the percentage of food filling the detected plate/bowl boundaries.
-4. **Nutrition Engine**: Breaks down complex dishes into base ingredients using a recipe catalog, scaling Calories, Protein, Fat, and Carbs dynamically based on the estimated volume.
-
-## Quick Start (API Server)
-
-Requirements: Python 3.10-3.12.
-
-1. Setup virtual environment and install dependencies:
-   ```powershell
-   py -3.11 -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -e ".[all]"
-   ```
-
-2. Start the API server:
-   ```powershell
-   # Ensure you have your trained weights in models/best.pt or models/best.onnx
-   uvicorn calcucalo.api:app --host 0.0.0.0 --port 8000
-   ```
-
-## Database and JWT authentication
-
-Copy `.env.example` to `.env` and set the Neon PostgreSQL URL and a random JWT secret. The
-real `.env` file is ignored by Git.
-
-```powershell
-Copy-Item .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(64))"
+```text
+VNFood-Nutrition/
+├── backend/
+│   ├── src/calcucalo/
+│   │   ├── api/             # FastAPI app và auth endpoints
+│   │   ├── core/            # Database và hạ tầng dùng chung
+│   │   ├── domain/          # Domain models
+│   │   ├── repositories/    # Truy cập nguồn dữ liệu
+│   │   ├── services/        # AI/nutrition application services
+│   │   └── cli.py
+│   ├── tests/
+│   ├── configs/
+│   ├── migrations/
+│   ├── schemas/
+│   ├── scripts/
+│   ├── models/
+│   ├── pyproject.toml
+│   ├── requirements.txt
+│   └── .env.example
+├── frontend/
+│   ├── src/
+│   ├── package.json
+│   └── .env.example
+├── docs/
+│   └── README.md
+├── infra/
+│   └── compose.yaml
+├── .gitignore
+└── README.md
 ```
 
-Put the generated value in `JWT_SECRET_KEY`, then initialize the authentication tables:
+`frontend/` hiện là workspace rỗng để lựa chọn framework ở bước tiếp theo. Không có frontend giả hoặc dependency chưa sử dụng được đưa vào repository.
+
+## Chạy backend local
+
+Yêu cầu Python 3.10-3.12.
+
+```powershell
+cd backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[all]"
+Copy-Item .env.example .env
+```
+
+Điền Neon PostgreSQL URL và JWT secret vào `backend/.env`, sau đó khởi tạo auth schema:
 
 ```powershell
 python scripts/init_auth_db.py
 ```
 
-Authentication endpoints:
+Khởi chạy FastAPI:
+
+```powershell
+uvicorn calcucalo.api.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+Các URL hữu ích:
+
+- Test console: <http://127.0.0.1:8000/> hoặc <http://127.0.0.1:8000/test-ui/>
+- Swagger UI: <http://127.0.0.1:8000/docs>
+- API health: <http://127.0.0.1:8000/health>
+- Auth/Neon health: <http://127.0.0.1:8000/api/v1/auth/health>
+
+## JWT authentication
+
+Backend cung cấp:
 
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/logout`
-- `POST /api/v1/auth/logout-all` (Bearer access token required)
-- `GET /api/v1/auth/me` (Bearer access token required)
+- `POST /api/v1/auth/logout-all`
+- `GET /api/v1/auth/me`
 - `GET /api/v1/auth/health`
 
-Register or log in with JSON:
+Hướng dẫn chi tiết và test thủ công nằm trong [docs/README.md](docs/README.md).
 
-```json
-{
-  "email": "user@example.com",
-  "password": "a-strong-password",
-  "full_name": "Example User"
-}
-```
+Test console trong `frontend/` cho phép kiểm tra health, register, login, `/me`, refresh,
+logout, logout-all và upload ảnh phân tích trực tiếp trên trình duyệt. FastAPI phục vụ giao diện
+này cùng origin nên không cần cấu hình CORS cho môi trường local.
 
-The response contains a short-lived access token and a rotating refresh token. Send the access
-token as `Authorization: Bearer <access_token>`. Refresh and logout requests use JSON containing
-`{"refresh_token": "<refresh_token>"}`. Refresh tokens are stored only as SHA-256 hashes and are
-revoked when rotated or logged out.
+## Test backend
 
-## API Usage
-
-The main endpoint is `POST /api/v1/food/analyze`. It accepts an image and a user-selected container type.
+Chạy từ thư mục `backend/`:
 
 ```powershell
-curl.exe -X POST "http://localhost:8000/api/v1/food/analyze" \
-  -F "image=@path\to\meal.jpg" \
-  -F "container_type=to_lon" \
-  -F "response_format=nutrition"
+python -m pytest
+python -m pytest tests/test_auth.py -q
+python scripts/smoke_test_auth.py
 ```
 
-**Supported `container_type` values:**
-- `chen` (Small bowl)
-- `to` (Standard bowl - Default for soup)
-- `to_lon` (Large bowl)
-- `dia_nho` (Small plate)
-- `dia` (Standard plate - Default for dry food)
-- `dia_lon` (Large plate)
-- `hop` (Takeout box - requires `container_length_cm` and `container_width_cm`)
+Smoke test sử dụng database trong `.env`, tạo tài khoản ngẫu nhiên và tự xóa dữ liệu test sau khi hoàn tất.
 
-## Dataset Preparation & Training
+## Chạy bằng Docker Compose
 
-1. **Download Dataset**:
-   ```powershell
-   kaggle datasets download -d thomasnguyen6868/vietfood68 --unzip -p data\raw\vietfood67
-   ```
+Tạo `backend/.env` trước, sau đó chạy từ thư mục gốc:
 
-2. **Prepare Configs**:
-   ```powershell
-   calcucalo prepare-dataset data\raw\vietfood67 --output configs\vietfood67.yaml
-   ```
+```powershell
+docker compose -f infra/compose.yaml up backend
+```
 
-3. **Train YOLO**:
-   ```powershell
-   python scripts/train_detector.py --data configs\vietfood67.yaml --model yolo11n.pt --epochs 100 --batch -1 --device 0 --export-onnx
-   ```
+Compose hiện phục vụ môi trường development: source được bind-mount và dependency backend được cài khi container khởi động.
+
+## Training và evaluation
+
+Chạy các lệnh từ `backend/`:
+
+```powershell
+python scripts/train_detector.py `
+  --data configs\vietfood67.yaml `
+  --model models\yolo11n.pt `
+  --epochs 100 `
+  --batch -1 `
+  --device 0 `
+  --export-onnx
+```
+
+Không commit `.env`, credential, dataset, checkpoint huấn luyện hoặc token thật vào Git.

@@ -7,6 +7,10 @@ __pycache__/
 .venv/
 venv/
 .env
+node_modules/
+dist/
+coverage/
+*.log
 
 # Datasets, weights and experiment artefacts are intentionally local.
 data/
