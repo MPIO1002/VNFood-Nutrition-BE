@@ -1,30 +1,32 @@
 from __future__ import annotations
 
-import os
 import base64
-import cv2
-import numpy as np
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
+import cv2
+import numpy as np
 from dotenv import load_dotenv
-load_dotenv()
-
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-
 from PIL import UnidentifiedImageError
 
 from .analyzer import FoodImageAnalyzer
+from .auth import router as auth_router
+from .database import database_is_configured
 from .detector import create_detector
-from .nutrition import NutritionCatalog, NutritionDB
+from .nutrition import NutritionDB
 from .portion import PortionEstimator
 from .segmenter import create_segmenter
 from .visualize import render_overlay
 
+load_dotenv()
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_CLASS_COUNT = 68
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
+app.include_router(auth_router)
 
 
 def _model_path() -> tuple[Path | None, str]:
@@ -96,13 +98,13 @@ def _model_readiness(info: dict[str, object]) -> dict[str, object]:
         )
     else:
         fraction = float(training.get("fraction", 1.0) or 1.0)
-        planned_epochs = int(
-            training.get("planned_epochs", training.get("epochs", 0)) or 0
-        )
+        planned_epochs = int(training.get("planned_epochs", training.get("epochs", 0)) or 0)
         completed_epochs = int(training.get("completed_epochs", 0) or 0)
-        if fraction < 1.0 or (
-            completed_epochs and completed_epochs <= 1
-        ) or (not completed_epochs and planned_epochs and planned_epochs <= 1):
+        if (
+            fraction < 1.0
+            or (completed_epochs and completed_epochs <= 1)
+            or (not completed_epochs and planned_epochs and planned_epochs <= 1)
+        ):
             status = "smoke_test"
             warnings.append(
                 "Checkpoint chỉ là smoke test hoặc chưa dùng toàn bộ dữ liệu; không dùng để kết luận độ chính xác."
@@ -173,8 +175,6 @@ def get_analyzer() -> FoodImageAnalyzer:
     )
 
 
-
-
 @app.get("/health")
 def health() -> dict[str, object]:
     model_path, source = _model_path()
@@ -185,6 +185,7 @@ def health() -> dict[str, object]:
         "model_file": model_path.name if model_path else None,
         "model_source": source,
         "analyzer_loaded": get_analyzer.cache_info().currsize > 0,
+        "database_configured": database_is_configured(),
     }
 
 
@@ -239,7 +240,11 @@ async def analyze_food(
                 status_code=422,
                 detail="container_type='hop' yêu cầu phải có container_length_cm và container_width_cm.",
             )
-    elif container_type in {"to", "chen", "dia"} and container_diameter_cm is None and plate_diameter_cm is not None:
+    elif (
+        container_type in {"to", "chen", "dia"}
+        and container_diameter_cm is None
+        and plate_diameter_cm is not None
+    ):
         container_diameter_cm = plate_diameter_cm
 
     if container_diameter_cm is not None and cm_per_pixel is not None:
@@ -265,7 +270,7 @@ async def analyze_food(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-        
+
     # Generate visualization overlay
     try:
         nparr = np.frombuffer(payload, np.uint8)
@@ -274,19 +279,19 @@ async def analyze_food(
             image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_BGR2RGB)
             overlay_rgb = render_overlay(image_rgb, result)
             overlay_bgr = cv2.cvtColor(overlay_rgb, cv2.COLOR_RGB2BGR)
-            _, buffer = cv2.imencode('.jpg', overlay_bgr)
-            visual_base64 = base64.b64encode(buffer).decode('utf-8')
+            _, buffer = cv2.imencode(".jpg", overlay_bgr)
+            visual_base64 = base64.b64encode(buffer).decode("utf-8")
         else:
             visual_base64 = None
-    except Exception:
+    except (cv2.error, IndexError, TypeError, ValueError):
         visual_base64 = None
 
     if response_format == "nutrition":
         out = result.to_nutrition_dict(compact=True, unwrap_single=True)
     else:
         out = result.to_dict()
-        
+
     if visual_base64:
         out["visual_base64"] = visual_base64
-        
+
     return out
