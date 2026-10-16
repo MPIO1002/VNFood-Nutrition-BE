@@ -236,20 +236,6 @@ async def analyze_food(
         if container_type is None:
             container_type = "dia"  # Default to plate if using legacy parameter
 
-    # Validate: box needs length+width, round containers need diameter
-    if container_type == "hop":
-        if container_length_cm is None or container_width_cm is None:
-            raise HTTPException(
-                status_code=422,
-                detail="container_type='hop' yêu cầu phải có container_length_cm và container_width_cm.",
-            )
-    elif (
-        container_type in {"to", "chen", "dia"}
-        and container_diameter_cm is None
-        and plate_diameter_cm is not None
-    ):
-        container_diameter_cm = plate_diameter_cm
-
     if container_diameter_cm is not None and cm_per_pixel is not None:
         raise HTTPException(status_code=422, detail="Use only one scale calibration method")
     if response_format not in {"full", "nutrition"}:

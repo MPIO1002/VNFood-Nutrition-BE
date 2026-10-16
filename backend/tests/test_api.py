@@ -90,3 +90,33 @@ def test_model_readiness_rejects_incomplete_training_run() -> None:
     assert readiness["detector_candidate"] is False
     assert readiness["production_ready"] is False
     assert "15/20 epoch" in readiness["warnings"][0]
+
+
+def test_analyze_endpoint_allows_hop_without_dimensions(monkeypatch) -> None:
+    client = TestClient(api_module.app)
+    import io
+    from PIL import Image
+
+    # Create dummy PNG image in memory
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color="red").save(buf, format="PNG")
+    buf.seek(0)
+
+    # Mock get_analyzer so we don't need real weights during API param validation test
+    class DummyAnalyzer:
+        def analyze(self, *args, **kwargs):
+            from calcucalo.domain.models import AnalysisResult
+            return AnalysisResult(64, 64, items=[], calibration=None, warnings=["test"])
+
+    monkeypatch.setattr(api_module, "get_analyzer", lambda: DummyAnalyzer())
+
+    response = client.post(
+        "/api/v1/food/analyze",
+        files={"image": ("test.png", buf.getvalue(), "image/png")},
+        data={"container_type": "hop"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "image" in data
+    assert data["image"]["width"] == 64
+

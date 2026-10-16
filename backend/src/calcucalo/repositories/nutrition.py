@@ -232,8 +232,9 @@ class NutritionCatalog:
         }
 
 class NutritionDB:
-    def __init__(self, config_path: str | Path):
+    def __init__(self, config_path: str | Path, fallback_catalog: NutritionCatalog | None = None):
         self.config_path = Path(config_path)
+        self.fallback_catalog = fallback_catalog
         self.db_config = None
         self._dish_map = {}
         
@@ -280,13 +281,13 @@ class NutritionDB:
     def base_portion_for(self, label: str) -> float | None:
         import os
         if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
-            return None
+            return self.fallback_catalog.base_portion_for(label) if self.fallback_catalog else None
             
         normalized_label = normalize_food_name(label)
         db_dish_name = self._dish_map.get(normalized_label)
         
         if not db_dish_name:
-            return None
+            return self.fallback_catalog.base_portion_for(label) if self.fallback_catalog else None
 
         try:
             import psycopg2
@@ -308,7 +309,7 @@ class NutritionDB:
             import logging
             logging.warning(f"Error getting base portion for {label}: {e}")
             
-        return None
+        return self.fallback_catalog.base_portion_for(label) if self.fallback_catalog else None
 
     def analyze(
         self,
@@ -319,13 +320,13 @@ class NutritionDB:
     ) -> dict[str, Any] | None:
         import os
         if (not self.db_config and not os.getenv("DATABASE_URL")) or not self._dish_map:
-            return None
+            return self.fallback_catalog.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method) if self.fallback_catalog else None
             
         normalized_label = normalize_food_name(label)
         db_dish_name = self._dish_map.get(normalized_label)
         
         if not db_dish_name:
-            return None
+            return self.fallback_catalog.analyze(label, estimated_portion_g=estimated_portion_g, portion_method=portion_method) if self.fallback_catalog else None
 
         try:
             conn = self._get_conn()
