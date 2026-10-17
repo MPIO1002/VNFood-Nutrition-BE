@@ -7,6 +7,7 @@ import pytest
 
 from calcucalo.api.app import app
 from calcucalo.api.auth import (
+    AUTH_SCHEMA_SQL,
     AuthError,
     AuthService,
     AuthSettings,
@@ -88,3 +89,9 @@ def test_auth_routes_are_registered() -> None:
         "/api/v1/auth/logout-all",
         "/api/v1/auth/me",
     } <= paths
+
+
+def test_auth_schema_uses_canonical_users_table() -> None:
+    assert "app_users" not in AUTH_SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS users" in AUTH_SCHEMA_SQL
+    assert "REFERENCES users(id) ON DELETE CASCADE" in AUTH_SCHEMA_SQL

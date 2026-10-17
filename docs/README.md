@@ -26,7 +26,8 @@ Các giá trị này có thể thay đổi bằng biến môi trường.
 
 - `backend/src/calcucalo/api/auth.py`: request/response model, JWT service, dependency xác thực và auth router.
 - `backend/src/calcucalo/core/database.py`: cấu hình PostgreSQL và connection pool.
-- `backend/migrations/0002_auth.sql`: schema cho bảng người dùng và refresh token.
+- `backend/migrations/0002_auth.sql`: schema JWT ban đầu, được giữ lại theo lịch sử migration.
+- `backend/migrations/0003_unify_user_model.sql`: hợp nhất tài khoản JWT vào bảng `users`.
 - `backend/scripts/init_auth_db.py`: khởi tạo schema và kiểm tra kết nối database.
 - `backend/scripts/smoke_test_auth.py`: chạy luồng auth end-to-end với database thật.
 - `backend/tests/test_auth.py`: unit test cho password hashing, token claims và route registration.
@@ -36,7 +37,7 @@ Các giá trị này có thể thay đổi bằng biến môi trường.
 ### Đăng ký hoặc đăng nhập
 
 1. Client gửi email và mật khẩu.
-2. Khi đăng ký, backend hash mật khẩu bằng bcrypt rồi lưu vào `app_users`.
+2. Khi đăng ký, backend hash mật khẩu bằng bcrypt rồi lưu vào `users`.
 3. Backend tạo một access token và một refresh token.
 4. Refresh token được hash bằng SHA-256 trước khi lưu vào `auth_refresh_tokens`.
 5. Token gốc chỉ được trả về cho client.
@@ -79,11 +80,12 @@ Refresh token cũ không thể sử dụng lại sau khi rotation thành công.
 
 ## 4. Database schema
 
-`app_users` lưu:
+`users` lưu:
 
 - Email duy nhất.
 - Bcrypt password hash.
 - Họ tên và trạng thái tài khoản.
+- Thông tin hồ sơ dinh dưỡng như chiều cao, cân nặng, mục tiêu và TDEE.
 - Thời điểm tạo/cập nhật.
 
 `auth_refresh_tokens` lưu:
