@@ -27,19 +27,31 @@ EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 AUTH_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS app_users (
-    id BIGSERIAL PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
     email VARCHAR(320) NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     full_name VARCHAR(120),
+    gender VARCHAR(50),
+    age INTEGER,
+    height DOUBLE PRECISION,
+    weight DOUBLE PRECISION,
+    activity_level VARCHAR(50),
+    goal VARCHAR(50),
+    bmi DOUBLE PRECISION,
+    tdee DOUBLE PRECISION,
+    target_calories DOUBLE PRECISION,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
     id UUID PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash CHAR(64) NOT NULL UNIQUE,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -180,7 +192,7 @@ class AuthService:
             with self.database.connection() as connection, _dict_cursor(connection) as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO app_users (email, password_hash, full_name)
+                    INSERT INTO users (email, password_hash, full_name)
                     VALUES (%s, %s, %s)
                     RETURNING id, email, full_name, is_active, created_at
                     """,
@@ -200,7 +212,7 @@ class AuthService:
             cursor.execute(
                 """
                     SELECT id, email, password_hash, full_name, is_active, created_at
-                    FROM app_users
+                    FROM users
                     WHERE email = %s
                     """,
                 (email,),
@@ -238,7 +250,7 @@ class AuthService:
             cursor.execute(
                 """
                     SELECT id, email, full_name, is_active, created_at
-                    FROM app_users
+                    FROM users
                     WHERE id = %s
                     """,
                 (user_id,),
@@ -295,7 +307,7 @@ class AuthService:
             cursor.execute(
                 """
                     SELECT id, email, full_name, is_active, created_at
-                    FROM app_users
+                    FROM users
                     WHERE id = %s
                     """,
                 (user_id,),

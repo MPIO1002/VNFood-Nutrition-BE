@@ -24,10 +24,11 @@ def main() -> int:
 
         login = client.post("/api/v1/auth/login", json={"email": email, "password": password})
         assert login.status_code == 200, login.text
+        login_pair = login.json()
 
         current_user = client.get(
             "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+            headers={"Authorization": f"Bearer {login_pair['access_token']}"},
         )
         assert current_user.status_code == 200, current_user.text
         assert current_user.json()["email"] == email
@@ -47,11 +48,21 @@ def main() -> int:
             "/api/v1/auth/refresh", json={"refresh_token": second["refresh_token"]}
         )
         assert revoked.status_code == 401, revoked.text
-        print("JWT HTTP register/access/refresh/logout smoke test passed.")
+
+        logout_all = client.post(
+            "/api/v1/auth/logout-all",
+            headers={"Authorization": f"Bearer {login_pair['access_token']}"},
+        )
+        assert logout_all.status_code == 200, logout_all.text
+        revoked_all = client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": login_pair["refresh_token"]}
+        )
+        assert revoked_all.status_code == 401, revoked_all.text
+        print("JWT HTTP register/access/refresh/logout/logout-all smoke test passed.")
         return 0
     finally:
         with service.database.connection() as connection, connection.cursor() as cursor:
-            cursor.execute("DELETE FROM app_users WHERE email = %s", (email,))
+            cursor.execute("DELETE FROM users WHERE email = %s", (email,))
 
 
 if __name__ == "__main__":
