@@ -222,22 +222,9 @@ def model_info() -> dict[str, object]:
 @app.post("/api/v1/food/analyze")
 async def analyze_food(
     image: Annotated[UploadFile, File()],
-    plate_diameter_cm: Annotated[float | None, Form()] = None,
     container_type: Annotated[str | None, Form()] = None,
-    container_diameter_cm: Annotated[float | None, Form()] = None,
-    container_length_cm: Annotated[float | None, Form()] = None,
-    container_width_cm: Annotated[float | None, Form()] = None,
-    cm_per_pixel: Annotated[float | None, Form()] = None,
     response_format: Annotated[str, Form()] = "full",
 ) -> dict[str, object]:
-    # Fallback for backward compatibility
-    if container_diameter_cm is None and plate_diameter_cm is not None:
-        container_diameter_cm = plate_diameter_cm
-        if container_type is None:
-            container_type = "dia"  # Default to plate if using legacy parameter
-
-    if container_diameter_cm is not None and cm_per_pixel is not None:
-        raise HTTPException(status_code=422, detail="Use only one scale calibration method")
     if response_format not in {"full", "nutrition"}:
         raise HTTPException(status_code=422, detail="response_format must be full or nutrition")
     payload = await image.read()
@@ -249,11 +236,7 @@ async def analyze_food(
         analyzer = get_analyzer()
         result = analyzer.analyze(
             payload,
-            plate_diameter_cm=container_diameter_cm,
             container_type=container_type,
-            container_length_cm=container_length_cm,
-            container_width_cm=container_width_cm,
-            cm_per_pixel=cm_per_pixel,
         )
     except (UnidentifiedImageError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
