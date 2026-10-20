@@ -1,5 +1,8 @@
 # Backend JWT Authentication
 
+Tài liệu API tính BMI/BMR/TDEE và meal log nằm tại
+[NUTRITION_MEAL_API.md](NUTRITION_MEAL_API.md).
+
 Tài liệu này mô tả cơ chế xác thực JWT hiện tại của CalcuCalo Backend và cách kiểm tra thủ công trên môi trường local kết nối Neon PostgreSQL.
 
 ## 1. Trạng thái hiện tại

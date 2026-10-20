@@ -86,6 +86,18 @@ Test console trong `frontend/` cho phép kiểm tra health, register, login, `/m
 logout, logout-all và upload ảnh phân tích trực tiếp trên trình duyệt. FastAPI phục vụ giao diện
 này cùng origin nên không cần cấu hình CORS cho môi trường local.
 
+## Nutrition và meal logs
+
+Backend cung cấp API có JWT bảo vệ để tính BMI/BMR/TDEE, lưu mục tiêu kcal và
+theo dõi bữa ăn theo ngày:
+
+- `POST /api/v1/nutrition/calculate`
+- `POST /api/v1/meals`
+- `GET /api/v1/meals/daily?date=YYYY-MM-DD`
+
+Chi tiết đầu vào, đầu ra, công thức và ví dụ nằm trong
+[docs/NUTRITION_MEAL_API.md](docs/NUTRITION_MEAL_API.md).
+
 ## Test backend
 
 Chạy từ thư mục `backend/`:

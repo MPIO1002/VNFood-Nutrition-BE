@@ -22,6 +22,7 @@ from ..services.portion import PortionEstimator
 from ..services.segmenter import create_segmenter
 from ..services.visualize import render_overlay
 from .auth import router as auth_router
+from .nutrition_meals import router as nutrition_meals_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_ROOT = PROJECT_ROOT.parent / "frontend"
@@ -30,6 +31,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 EXPECTED_CLASS_COUNT = 68
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
 app.include_router(auth_router)
+app.include_router(nutrition_meals_router)
 
 
 def _model_path() -> tuple[Path | None, str]:
