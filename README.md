@@ -88,8 +88,9 @@ này cùng origin nên không cần cấu hình CORS cho môi trường local.
 
 ## Nutrition và meal logs
 
-Backend cung cấp API có JWT bảo vệ để tính BMI/BMR/TDEE, lưu mục tiêu kcal và
-theo dõi bữa ăn theo ngày:
+Backend cung cấp API có JWT bảo vệ để ước tính BMI/RMR/TDEE, áp dụng giới hạn
+an toàn cho mục tiêu kcal và theo dõi bữa ăn theo ngày. Meal log có thể dùng
+kcal nhập thủ công hoặc để backend tính từ catalog nguyên liệu:
 
 - `POST /api/v1/nutrition/calculate`
 - `POST /api/v1/meals`

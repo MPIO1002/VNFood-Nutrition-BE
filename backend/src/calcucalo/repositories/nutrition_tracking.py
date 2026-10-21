@@ -5,12 +5,22 @@ from typing import Any
 
 from ..core.database import PostgresDatabase
 
+MAX_MEAL_CALORIES_KCAL = 20_000.0
+
 
 class UserNotFoundError(LookupError):
     pass
 
 
 class DishNotFoundError(LookupError):
+    pass
+
+
+class DishNutritionUnavailableError(LookupError):
+    pass
+
+
+class MealCalorieLimitError(ValueError):
     pass
 
 
@@ -22,7 +32,7 @@ class NutritionTrackingRepository:
         self,
         *,
         user_id: int,
-        gender: str,
+        sex_for_equation: str,
         age: int,
         height_cm: float,
         weight_kg: float,
@@ -36,7 +46,8 @@ class NutritionTrackingRepository:
             cursor.execute(
                 """
                 UPDATE users
-                SET gender = %s,
+                SET sex_for_equation = %s,
+                    gender = %s,
                     age = %s,
                     height = %s,
                     weight = %s,
@@ -49,7 +60,8 @@ class NutritionTrackingRepository:
                 WHERE id = %s
                 """,
                 (
-                    gender,
+                    sex_for_equation,
+                    sex_for_equation,
                     age,
                     height_cm,
                     weight_kg,
@@ -71,18 +83,50 @@ class NutritionTrackingRepository:
         dish_id: int | None,
         meal_type: str,
         quantity: float,
-        total_calories: float,
+        total_calories: float | None,
         image_url: str | None,
         consumed_at: datetime,
     ) -> dict[str, Any]:
         with self.database.connection() as connection, _dict_cursor(connection) as cursor:
             dish_name: str | None = None
+            catalog_calories_per_serving: float | None = None
             if dish_id is not None:
-                cursor.execute("SELECT dishes_name FROM dishes WHERE id = %s", (dish_id,))
+                cursor.execute(
+                    """
+                    SELECT
+                        d.dishes_name,
+                        SUM(i.calories * di.quantity / 100.0) AS catalog_calories_per_serving
+                    FROM dishes AS d
+                    LEFT JOIN dish_ingredients AS di ON di.dish_id = d.id
+                    LEFT JOIN ingredients AS i ON i.id = di.ingredient_id
+                    WHERE d.id = %s
+                    GROUP BY d.id, d.dishes_name
+                    """,
+                    (dish_id,),
+                )
                 dish = cursor.fetchone()
                 if dish is None:
                     raise DishNotFoundError(f"Dish {dish_id} does not exist")
                 dish_name = str(dish["dishes_name"])
+                catalog_value = dish["catalog_calories_per_serving"]
+                if catalog_value is not None:
+                    catalog_calories_per_serving = round(float(catalog_value), 1)
+
+            if total_calories is None:
+                if catalog_calories_per_serving is None:
+                    raise DishNutritionUnavailableError(
+                        f"Dish {dish_id} has no ingredient nutrition data; "
+                        "provide total_calories manually"
+                    )
+                resolved_total_calories = round(catalog_calories_per_serving * quantity, 1)
+                if resolved_total_calories > MAX_MEAL_CALORIES_KCAL:
+                    raise MealCalorieLimitError(
+                        f"Calculated meal calories must not exceed {MAX_MEAL_CALORIES_KCAL:.0f}"
+                    )
+                calorie_source = "dish_catalog"
+            else:
+                resolved_total_calories = total_calories
+                calorie_source = "manual"
 
             cursor.execute(
                 """
@@ -92,10 +136,12 @@ class NutritionTrackingRepository:
                     meal_type,
                     quantity,
                     total_calories,
+                    calorie_source,
+                    catalog_calories_per_serving,
                     image_url,
                     consumed_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING
                     id,
                     user_id,
@@ -103,6 +149,8 @@ class NutritionTrackingRepository:
                     meal_type,
                     quantity,
                     total_calories,
+                    calorie_source,
+                    catalog_calories_per_serving,
                     image_url,
                     consumed_at,
                     created_at,
@@ -113,7 +161,9 @@ class NutritionTrackingRepository:
                     dish_id,
                     meal_type,
                     quantity,
-                    total_calories,
+                    resolved_total_calories,
+                    calorie_source,
+                    catalog_calories_per_serving,
                     image_url,
                     consumed_at,
                 ),
@@ -148,6 +198,8 @@ class NutritionTrackingRepository:
                     ml.meal_type,
                     ml.quantity,
                     ml.total_calories,
+                    ml.calorie_source,
+                    ml.catalog_calories_per_serving,
                     ml.image_url,
                     ml.consumed_at,
                     ml.created_at,

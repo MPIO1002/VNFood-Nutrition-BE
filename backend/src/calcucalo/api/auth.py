@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     full_name VARCHAR(120),
     gender VARCHAR(50),
+    sex_for_equation VARCHAR(10),
     age INTEGER,
     height DOUBLE PRECISION,
     weight DOUBLE PRECISION,
@@ -47,7 +48,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+    ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS sex_for_equation VARCHAR(10);
 
 CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
     id UUID PRIMARY KEY,

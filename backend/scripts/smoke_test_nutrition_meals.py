@@ -23,10 +23,22 @@ def main() -> int:
     password = secrets.token_urlsafe(24)
 
     with service.database.connection() as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT id FROM dishes ORDER BY id LIMIT 1")
+        cursor.execute(
+            """
+            SELECT d.id, SUM(i.calories * di.quantity / 100.0) AS catalog_calories
+            FROM dishes AS d
+            JOIN dish_ingredients AS di ON di.dish_id = d.id
+            JOIN ingredients AS i ON i.id = di.ingredient_id
+            GROUP BY d.id
+            HAVING SUM(i.calories * di.quantity / 100.0) IS NOT NULL
+            ORDER BY d.id
+            LIMIT 1
+            """
+        )
         dish = cursor.fetchone()
-    assert dish is not None, "The dishes table must contain at least one row"
+    assert dish is not None, "At least one dish must have ingredient nutrition data"
     dish_id = int(dish[0])
+    expected_meal_calories = round(float(dish[1]), 1)
 
     try:
         registered = client.post(
@@ -41,7 +53,7 @@ def main() -> int:
             "/api/v1/nutrition/calculate",
             headers=headers,
             json={
-                "gender": "male",
+                "sex_for_equation": "male",
                 "age": 30,
                 "height_cm": 175,
                 "weight_kg": 70,
@@ -50,7 +62,7 @@ def main() -> int:
             },
         )
         assert calculated.status_code == 200, calculated.text
-        assert calculated.json()["target_kcal_per_day"] == 2555.6
+        assert calculated.json()["target_kcal_per_day"] == 2556.0
 
         now = datetime.now(BANGKOK_TIMEZONE)
         created = client.post(
@@ -60,11 +72,12 @@ def main() -> int:
                 "dish_id": dish_id,
                 "meal_type": "lunch",
                 "quantity": 1,
-                "total_calories": 620,
                 "consumed_at": now.isoformat(),
             },
         )
         assert created.status_code == 201, created.text
+        assert created.json()["calorie_source"] == "dish_catalog"
+        assert created.json()["total_calories"] == expected_meal_calories
 
         daily = client.get(
             "/api/v1/meals/daily",
@@ -74,8 +87,9 @@ def main() -> int:
         assert daily.status_code == 200, daily.text
         payload = daily.json()
         assert payload["meal_count"] == 1, payload
-        assert payload["total_calories"] == 620.0, payload
-        assert payload["remaining_kcal"] == 1935.6, payload
+        assert payload["total_calories"] == expected_meal_calories, payload
+        assert payload["remaining_kcal"] == round(2556.0 - expected_meal_calories, 1), payload
+        assert payload["calorie_source_counts"]["dish_catalog"] == 1, payload
         print("Nutrition calculation and meal log smoke test passed.")
         return 0
     finally:
