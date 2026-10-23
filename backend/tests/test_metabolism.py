@@ -144,3 +144,44 @@ def test_calculation_rejects_unknown_activity_level() -> None:
             activity_level="sometimes",
             goal="maintain_weight",
         )
+
+
+def test_weight_change_target_and_timeline_calculation() -> None:
+    result = calculate_metabolism(
+        sex_for_equation="male",
+        age=30,
+        height_cm=175,
+        weight_kg=70,
+        activity_level="moderate",
+        goal="lose_weight",
+        goal_pace="standard",
+        weight_change_kg=5.0,
+    )
+
+    assert result.current_weight_kg == 70.0
+    assert result.weight_change_kg == 5.0
+    assert result.target_weight_kg == 65.0
+    assert result.current_bmi == 22.9
+    assert result.target_bmi == 21.2
+    assert result.weekly_pace_kg == 0.5
+    # 5.0 kg * 7700 / 500 kcal = 77 days
+    assert result.estimated_days == 77
+    assert result.estimated_weeks == 11.0
+    assert result.target_date is not None
+    assert "Để giảm 5 kg an toàn" in result.summary_message
+
+
+def test_excessive_weight_loss_causing_underweight_bmi_is_rejected() -> None:
+    # 175cm, 60kg (BMI ~ 19.6). Losing 10kg would make weight 50kg (BMI ~ 16.3 < 18.5)
+    with pytest.raises(UnsafeCalorieTargetError, match="dưới ngưỡng an toàn 18.5"):
+        calculate_metabolism(
+            sex_for_equation="male",
+            age=25,
+            height_cm=175,
+            weight_kg=60,
+            activity_level="moderate",
+            goal="lose_weight",
+            goal_pace="standard",
+            weight_change_kg=10.0,
+        )
+

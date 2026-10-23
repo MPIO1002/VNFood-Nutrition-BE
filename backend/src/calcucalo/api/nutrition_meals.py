@@ -20,6 +20,7 @@ from ..services.metabolism import (
     MetabolismResult,
     UnsafeCalorieTargetError,
     UnsupportedMetabolismProfileError,
+    calculate_macro_targets,
     calculate_metabolism,
 )
 from .auth import get_current_user
@@ -80,6 +81,12 @@ class MetabolismRequest(BaseModel):
         )
     )
     goal: NutritionGoal = Field(description="Lose, maintain, or gain weight")
+    weight_change_kg: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Target amount of weight to lose or gain in kg. Omit or 0 for maintain_weight.",
+    )
     goal_pace: GoalPace | None = Field(
         default=None,
         description=(
@@ -100,8 +107,11 @@ class MetabolismRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_goal_pace(self) -> MetabolismRequest:
-        if self.goal == NutritionGoal.MAINTAIN_WEIGHT and self.goal_pace is not None:
-            raise ValueError("goal_pace must be omitted when goal is maintain_weight")
+        if self.goal == NutritionGoal.MAINTAIN_WEIGHT:
+            if self.goal_pace is not None:
+                raise ValueError("goal_pace must be omitted when goal is maintain_weight")
+            if self.weight_change_kg not in (None, 0.0):
+                raise ValueError("weight_change_kg must be omitted or 0 when goal is maintain_weight")
         return self
 
 
@@ -114,6 +124,11 @@ class MetabolismResponse(BaseModel):
     activity_level: ActivityLevel
     goal: NutritionGoal
     bmi: float
+    current_weight_kg: float
+    weight_change_kg: float
+    target_weight_kg: float
+    current_bmi: float
+    target_bmi: float
     bmi_category_general: str
     bmi_category_asian: str
     estimated_rmr_kcal_per_day: float
@@ -122,9 +137,18 @@ class MetabolismResponse(BaseModel):
     goal_pace: GoalPace | None
     requested_goal_adjustment_kcal: float
     applied_goal_adjustment_kcal: float
+    daily_calorie_adjustment: float
     minimum_target_kcal: float
     target_was_safety_limited: bool
     target_kcal_per_day: float
+    target_protein_g: float
+    target_carb_g: float
+    target_fat_g: float
+    weekly_pace_kg: float | None = None
+    estimated_days: int | None = None
+    estimated_weeks: float | None = None
+    target_date: str | None = None
+    summary_message: str
     formula_name: str
     is_estimate: bool
     warnings: list[str]
@@ -142,6 +166,27 @@ class MealCreateRequest(BaseModel):
         le=20_000,
         allow_inf_nan=False,
         description="Omit to calculate from dish ingredients; provide for a manual log",
+    )
+    protein_g: float | None = Field(
+        default=None,
+        ge=0,
+        le=1_000,
+        allow_inf_nan=False,
+        description="Protein in grams; omit to calculate from dish catalog",
+    )
+    fat_g: float | None = Field(
+        default=None,
+        ge=0,
+        le=1_000,
+        allow_inf_nan=False,
+        description="Fat in grams; omit to calculate from dish catalog",
+    )
+    carb_g: float | None = Field(
+        default=None,
+        ge=0,
+        le=1_000,
+        allow_inf_nan=False,
+        description="Carbohydrates in grams; omit to calculate from dish catalog",
     )
     image_url: str | None = Field(default=None, max_length=2048)
     consumed_at: datetime | None = None
@@ -168,6 +213,9 @@ class MealResponse(BaseModel):
     meal_type: str
     quantity: float
     total_calories: float
+    protein_g: float | None = None
+    fat_g: float | None = None
+    carb_g: float | None = None
     calorie_source: CalorieSource
     catalog_calories_per_serving: float | None
     image_url: str | None
@@ -183,6 +231,15 @@ class DailyMealsResponse(BaseModel):
     total_calories: float
     target_kcal_per_day: float | None
     remaining_kcal: float | None
+    total_protein_g: float = 0.0
+    total_fat_g: float = 0.0
+    total_carb_g: float = 0.0
+    target_protein_g: float | None = None
+    target_fat_g: float | None = None
+    target_carb_g: float | None = None
+    remaining_protein_g: float | None = None
+    remaining_fat_g: float | None = None
+    remaining_carb_g: float | None = None
     calorie_source_counts: dict[str, int]
     meals: list[MealResponse]
 
@@ -207,6 +264,7 @@ def calculate_daily_nutrition(
             activity_level=request.activity_level.value,
             goal=request.goal.value,
             goal_pace=request.goal_pace.value if request.goal_pace else None,
+            weight_change_kg=request.weight_change_kg,
             pregnant_or_breastfeeding=request.pregnant_or_breastfeeding,
             competitive_athlete=request.competitive_athlete,
             metabolism_affecting_condition=request.metabolism_affecting_condition,
@@ -260,6 +318,9 @@ def create_meal(
             meal_type=request.meal_type,
             quantity=request.quantity,
             total_calories=request.total_calories,
+            protein_g=request.protein_g,
+            fat_g=request.fat_g,
+            carb_g=request.carb_g,
             image_url=request.image_url,
             consumed_at=_as_bangkok_naive(request.consumed_at),
         )
@@ -287,14 +348,28 @@ def get_daily_meals(
 ) -> dict[str, Any]:
     day = requested_date or datetime.now(BANGKOK_TIMEZONE).date()
     try:
-        meals, target = repository.daily_meals(user_id=int(current_user["id"]), day=day)
+        meals, target, goal = repository.daily_meals(user_id=int(current_user["id"]), day=day)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:
         raise _database_unavailable(exc) from exc
 
     total = round(sum(float(meal["total_calories"]) for meal in meals), 1)
-    remaining = round(target - total, 1) if target is not None else None
+    total_protein = round(sum(float(meal["protein_g"] or 0.0) for meal in meals), 1)
+    total_fat = round(sum(float(meal["fat_g"] or 0.0) for meal in meals), 1)
+    total_carb = round(sum(float(meal["carb_g"] or 0.0) for meal in meals), 1)
+
+    if target is not None:
+        target_protein, target_carb, target_fat = calculate_macro_targets(target, goal)
+        remaining = round(target - total, 1)
+        remaining_protein = round(target_protein - total_protein, 1)
+        remaining_carb = round(target_carb - total_carb, 1)
+        remaining_fat = round(target_fat - total_fat, 1)
+    else:
+        remaining = None
+        target_protein = target_carb = target_fat = None
+        remaining_protein = remaining_carb = remaining_fat = None
+
     source_counts = {source.value: 0 for source in CalorieSource}
     for meal in meals:
         source = str(meal["calorie_source"])
@@ -305,6 +380,15 @@ def get_daily_meals(
         "total_calories": total,
         "target_kcal_per_day": target,
         "remaining_kcal": remaining,
+        "total_protein_g": total_protein,
+        "total_fat_g": total_fat,
+        "total_carb_g": total_carb,
+        "target_protein_g": target_protein,
+        "target_fat_g": target_fat,
+        "target_carb_g": target_carb,
+        "remaining_protein_g": remaining_protein,
+        "remaining_fat_g": remaining_fat,
+        "remaining_carb_g": remaining_carb,
         "calorie_source_counts": source_counts,
         "meals": meals,
     }

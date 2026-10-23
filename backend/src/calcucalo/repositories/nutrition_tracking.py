@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import threading
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -27,6 +26,25 @@ class MealCalorieLimitError(ValueError):
 class NutritionTrackingRepository:
     def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
+
+    def initialize_schema(self) -> None:
+        if self._schema_ready:
+            return
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            with self.database.connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    ALTER TABLE meal_logs
+                        ADD COLUMN IF NOT EXISTS protein_g DOUBLE PRECISION,
+                        ADD COLUMN IF NOT EXISTS fat_g DOUBLE PRECISION,
+                        ADD COLUMN IF NOT EXISTS carb_g DOUBLE PRECISION;
+                    """
+                )
+            self._schema_ready = True
 
     def update_metabolism_profile(
         self,
@@ -84,18 +102,28 @@ class NutritionTrackingRepository:
         meal_type: str,
         quantity: float,
         total_calories: float | None,
+        protein_g: float | None = None,
+        fat_g: float | None = None,
+        carb_g: float | None = None,
         image_url: str | None,
         consumed_at: datetime,
     ) -> dict[str, Any]:
+        self.initialize_schema()
         with self.database.connection() as connection, _dict_cursor(connection) as cursor:
             dish_name: str | None = None
             catalog_calories_per_serving: float | None = None
+            catalog_protein_per_serving: float | None = None
+            catalog_fat_per_serving: float | None = None
+            catalog_carb_per_serving: float | None = None
             if dish_id is not None:
                 cursor.execute(
                     """
                     SELECT
                         d.dishes_name,
-                        SUM(i.calories * di.quantity / 100.0) AS catalog_calories_per_serving
+                        SUM(i.calories * di.quantity / 100.0) AS catalog_calories_per_serving,
+                        SUM(i.protein * di.quantity / 100.0) AS catalog_protein_per_serving,
+                        SUM(i.fat * di.quantity / 100.0) AS catalog_fat_per_serving,
+                        SUM(i.carb * di.quantity / 100.0) AS catalog_carb_per_serving
                     FROM dishes AS d
                     LEFT JOIN dish_ingredients AS di ON di.dish_id = d.id
                     LEFT JOIN ingredients AS i ON i.id = di.ingredient_id
@@ -108,9 +136,14 @@ class NutritionTrackingRepository:
                 if dish is None:
                     raise DishNotFoundError(f"Dish {dish_id} does not exist")
                 dish_name = str(dish["dishes_name"])
-                catalog_value = dish["catalog_calories_per_serving"]
-                if catalog_value is not None:
-                    catalog_calories_per_serving = round(float(catalog_value), 1)
+                if dish["catalog_calories_per_serving"] is not None:
+                    catalog_calories_per_serving = round(float(dish["catalog_calories_per_serving"]), 1)
+                if dish["catalog_protein_per_serving"] is not None:
+                    catalog_protein_per_serving = round(float(dish["catalog_protein_per_serving"]), 1)
+                if dish["catalog_fat_per_serving"] is not None:
+                    catalog_fat_per_serving = round(float(dish["catalog_fat_per_serving"]), 1)
+                if dish["catalog_carb_per_serving"] is not None:
+                    catalog_carb_per_serving = round(float(dish["catalog_carb_per_serving"]), 1)
 
             if total_calories is None:
                 if catalog_calories_per_serving is None:
@@ -128,6 +161,22 @@ class NutritionTrackingRepository:
                 resolved_total_calories = total_calories
                 calorie_source = "manual"
 
+            resolved_protein_g = (
+                protein_g
+                if protein_g is not None
+                else (round(catalog_protein_per_serving * quantity, 1) if catalog_protein_per_serving is not None else None)
+            )
+            resolved_fat_g = (
+                fat_g
+                if fat_g is not None
+                else (round(catalog_fat_per_serving * quantity, 1) if catalog_fat_per_serving is not None else None)
+            )
+            resolved_carb_g = (
+                carb_g
+                if carb_g is not None
+                else (round(catalog_carb_per_serving * quantity, 1) if catalog_carb_per_serving is not None else None)
+            )
+
             cursor.execute(
                 """
                 INSERT INTO meal_logs (
@@ -136,12 +185,15 @@ class NutritionTrackingRepository:
                     meal_type,
                     quantity,
                     total_calories,
+                    protein_g,
+                    fat_g,
+                    carb_g,
                     calorie_source,
                     catalog_calories_per_serving,
                     image_url,
                     consumed_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING
                     id,
                     user_id,
@@ -149,6 +201,9 @@ class NutritionTrackingRepository:
                     meal_type,
                     quantity,
                     total_calories,
+                    protein_g,
+                    fat_g,
+                    carb_g,
                     calorie_source,
                     catalog_calories_per_serving,
                     image_url,
@@ -162,6 +217,9 @@ class NutritionTrackingRepository:
                     meal_type,
                     quantity,
                     resolved_total_calories,
+                    resolved_protein_g,
+                    resolved_fat_g,
+                    resolved_carb_g,
                     calorie_source,
                     catalog_calories_per_serving,
                     image_url,
@@ -172,13 +230,16 @@ class NutritionTrackingRepository:
             meal["dish_name"] = dish_name
             return meal
 
-    def daily_meals(self, *, user_id: int, day: date) -> tuple[list[dict[str, Any]], float | None]:
+    def daily_meals(
+        self, *, user_id: int, day: date
+    ) -> tuple[list[dict[str, Any]], float | None, str | None]:
+        self.initialize_schema()
         start = datetime.combine(day, time.min)
         end = start + timedelta(days=1)
         with self.database.connection() as connection, _dict_cursor(connection) as cursor:
             cursor.execute(
                 """
-                SELECT target_calories
+                SELECT target_calories, goal
                 FROM users
                 WHERE id = %s
                 """,
@@ -198,6 +259,9 @@ class NutritionTrackingRepository:
                     ml.meal_type,
                     ml.quantity,
                     ml.total_calories,
+                    ml.protein_g,
+                    ml.fat_g,
+                    ml.carb_g,
                     ml.calorie_source,
                     ml.catalog_calories_per_serving,
                     ml.image_url,
@@ -215,7 +279,7 @@ class NutritionTrackingRepository:
             )
             meals = [dict(row) for row in cursor.fetchall()]
             target = user["target_calories"]
-            return meals, float(target) if target is not None else None
+            return meals, (float(target) if target is not None else None), user.get("goal")
 
 
 def _dict_cursor(connection: Any) -> Any:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 from typing import Any
 
 ACTIVITY_FACTORS: dict[str, float] = {
@@ -44,6 +45,11 @@ class UnsafeCalorieTargetError(ValueError):
 @dataclass(frozen=True)
 class MetabolismResult:
     bmi: float
+    current_weight_kg: float
+    weight_change_kg: float
+    target_weight_kg: float
+    current_bmi: float
+    target_bmi: float
     bmi_category_general: str
     bmi_category_asian: str
     estimated_rmr_kcal_per_day: float
@@ -52,9 +58,18 @@ class MetabolismResult:
     goal_pace: str | None
     requested_goal_adjustment_kcal: float
     applied_goal_adjustment_kcal: float
+    daily_calorie_adjustment: float
     minimum_target_kcal: float
     target_was_safety_limited: bool
     target_kcal_per_day: float
+    target_protein_g: float
+    target_carb_g: float
+    target_fat_g: float
+    weekly_pace_kg: float | None
+    estimated_days: int | None
+    estimated_weeks: float | None
+    target_date: str | None
+    summary_message: str
     formula_name: str
     is_estimate: bool
     warnings: tuple[str, ...]
@@ -63,6 +78,27 @@ class MetabolismResult:
         payload = asdict(self)
         payload["warnings"] = list(self.warnings)
         return payload
+
+
+def calculate_macro_targets(
+    target_kcal_per_day: float,
+    goal: str | None = None,
+) -> tuple[float, float, float]:
+    """Calculate target protein, carb, and fat in grams based on calorie target and goal."""
+    if goal == "lose_weight":
+        # Higher protein for satiety and muscle sparing: 35% Protein, 40% Carb, 25% Fat
+        p_ratio, c_ratio, f_ratio = 0.35, 0.40, 0.25
+    elif goal == "gain_weight":
+        # Higher carb for training fuel: 25% Protein, 55% Carb, 20% Fat
+        p_ratio, c_ratio, f_ratio = 0.25, 0.55, 0.20
+    else:
+        # Balanced: 25% Protein, 50% Carb, 25% Fat
+        p_ratio, c_ratio, f_ratio = 0.25, 0.50, 0.25
+
+    protein_g = round((target_kcal_per_day * p_ratio) / 4.0, 1)
+    carb_g = round((target_kcal_per_day * c_ratio) / 4.0, 1)
+    fat_g = round((target_kcal_per_day * f_ratio) / 9.0, 1)
+    return protein_g, carb_g, fat_g
 
 
 def calculate_metabolism(
@@ -74,11 +110,12 @@ def calculate_metabolism(
     activity_level: str,
     goal: str,
     goal_pace: str | None = None,
+    weight_change_kg: float | None = None,
     pregnant_or_breastfeeding: bool = False,
     competitive_athlete: bool = False,
     metabolism_affecting_condition: bool = False,
 ) -> MetabolismResult:
-    """Estimate adult BMI, resting energy expenditure, TDEE and calorie target.
+    """Estimate adult BMI, resting energy expenditure, TDEE, macro target and timeline.
 
     Resting energy expenditure uses Mifflin-St Jeor. The result is a planning
     estimate for generally healthy adults, not a diagnosis or prescription.
@@ -104,6 +141,30 @@ def calculate_metabolism(
     bmi = weight_kg / ((height_cm / 100.0) ** 2)
     if goal == "lose_weight" and bmi < 18.5:
         raise UnsafeCalorieTargetError("Weight-loss target is not available when BMI is below 18.5")
+
+    current_weight = round(float(weight_kg), 1)
+    resolved_weight_change = round(float(weight_change_kg), 1) if weight_change_kg is not None else 0.0
+    if resolved_weight_change < 0:
+        raise ValueError("weight_change_kg must be non-negative")
+
+    if goal == "maintain_weight":
+        target_weight = current_weight
+        resolved_weight_change = 0.0
+    elif goal == "lose_weight":
+        target_weight = round(current_weight - resolved_weight_change, 1)
+        if target_weight <= 20.0:
+            raise UnsafeCalorieTargetError("Cân nặng mục tiêu quá thấp, không an toàn.")
+        target_bmi_val = target_weight / ((height_cm / 100.0) ** 2)
+        if target_bmi_val < 18.5 and resolved_weight_change > 0:
+            raise UnsafeCalorieTargetError(
+                f"Mục tiêu giảm {resolved_weight_change:g} kg sẽ khiến BMI đạt {target_bmi_val:.1f} (dưới ngưỡng an toàn 18.5)."
+            )
+    elif goal == "gain_weight":
+        target_weight = round(current_weight + resolved_weight_change, 1)
+    else:
+        target_weight = current_weight
+
+    displayed_target_bmi = round(target_weight / ((height_cm / 100.0) ** 2), 1)
 
     estimated_rmr = 10.0 * weight_kg + 6.25 * height_cm - 5.0 * age + sex_offset
     estimated_tdee = estimated_rmr * activity_factor
@@ -133,8 +194,49 @@ def calculate_metabolism(
         goal=goal,
         target_was_safety_limited=target_was_safety_limited,
     )
+    target_protein_g, target_carb_g, target_fat_g = calculate_macro_targets(target, goal)
+
+    if goal == "maintain_weight":
+        weekly_pace = 0.0
+        estimated_days = 0
+        estimated_weeks = 0.0
+        target_date = None
+        summary_msg = f"Để duy trì vóc dáng {current_weight:g} kg, bạn nên nạp {target:,.0f} kcal/ngày."
+    elif resolved_weight_change == 0.0:
+        weekly_pace = 0.5 if resolved_goal_pace == "standard" else 0.25
+        estimated_days = None
+        estimated_weeks = None
+        target_date = None
+        verb = "giảm" if goal == "lose_weight" else "tăng"
+        summary_msg = f"Mục tiêu {verb} cân an toàn của bạn là {target:,.0f} kcal/ngày."
+    else:
+        weekly_pace = 0.5 if resolved_goal_pace == "standard" else 0.25
+        total_energy_needed = resolved_weight_change * 7700.0
+        daily_adj = abs(applied_adjustment)
+        if daily_adj > 0:
+            estimated_days = int(round(total_energy_needed / daily_adj))
+            estimated_weeks = round(estimated_days / 7.0, 1)
+            target_date_obj = date.today() + timedelta(days=estimated_days)
+            target_date = target_date_obj.isoformat()
+            target_date_str = target_date_obj.strftime("%d/%m/%Y")
+            verb = "giảm" if goal == "lose_weight" else "tăng"
+            summary_msg = (
+                f"Để {verb} {resolved_weight_change:g} kg an toàn, bạn nên nạp {target:,.0f} kcal/ngày. "
+                f"Bạn dự kiến sẽ đạt {target_weight:g} kg sau khoảng {estimated_weeks:g} tuần (vào ngày {target_date_str})."
+            )
+        else:
+            estimated_days = None
+            estimated_weeks = None
+            target_date = None
+            summary_msg = f"Mục tiêu năng lượng mỗi ngày là {target:,.0f} kcal/ngày."
+
     return MetabolismResult(
         bmi=displayed_bmi,
+        current_weight_kg=current_weight,
+        weight_change_kg=resolved_weight_change,
+        target_weight_kg=target_weight,
+        current_bmi=displayed_bmi,
+        target_bmi=displayed_target_bmi,
         bmi_category_general=_bmi_category_general(displayed_bmi),
         bmi_category_asian=_bmi_category_asian(displayed_bmi),
         estimated_rmr_kcal_per_day=float(displayed_rmr),
@@ -143,9 +245,18 @@ def calculate_metabolism(
         goal_pace=resolved_goal_pace,
         requested_goal_adjustment_kcal=requested_adjustment,
         applied_goal_adjustment_kcal=applied_adjustment,
+        daily_calorie_adjustment=applied_adjustment,
         minimum_target_kcal=minimum_target,
         target_was_safety_limited=target_was_safety_limited,
         target_kcal_per_day=target,
+        target_protein_g=target_protein_g,
+        target_carb_g=target_carb_g,
+        target_fat_g=target_fat_g,
+        weekly_pace_kg=weekly_pace,
+        estimated_days=estimated_days,
+        estimated_weeks=estimated_weeks,
+        target_date=target_date,
+        summary_message=summary_msg,
         formula_name="mifflin_st_jeor_1990",
         is_estimate=True,
         warnings=warnings,
