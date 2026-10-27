@@ -1,5 +1,8 @@
 # Backend JWT Authentication
 
+Xem [tổng quan kiến trúc và luồng backend](BACKEND_OVERVIEW.md) để biết vị trí các
+module, API, database/migration, cách chạy và trạng thái test hiện tại.
+
 Tài liệu API ước tính BMI/RMR/TDEE, giới hạn an toàn và meal log nằm tại
 [NUTRITION_MEAL_API.md](NUTRITION_MEAL_API.md).
 

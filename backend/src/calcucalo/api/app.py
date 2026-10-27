@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import UnidentifiedImageError
 
 from ..core.database import database_is_configured
+from ..services.cloudinary_upload import cloudinary_is_configured
 from ..repositories.nutrition import NutritionDB
 from ..services.analyzer import FoodImageAnalyzer
 from ..services.detector import create_detector
@@ -23,6 +24,7 @@ from ..services.segmenter import create_segmenter
 from ..services.visualize import render_overlay
 from .auth import router as auth_router
 from .nutrition_meals import router as nutrition_meals_router
+from .profile_progress import router as profile_progress_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_ROOT = PROJECT_ROOT.parent / "frontend"
@@ -32,6 +34,7 @@ EXPECTED_CLASS_COUNT = 68
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
 app.include_router(auth_router)
 app.include_router(nutrition_meals_router)
+app.include_router(profile_progress_router)
 
 
 def _model_path() -> tuple[Path | None, str]:
@@ -191,6 +194,7 @@ def health() -> dict[str, object]:
         "model_source": source,
         "analyzer_loaded": get_analyzer.cache_info().currsize > 0,
         "database_configured": database_is_configured(),
+        "cloudinary_configured": cloudinary_is_configured(),
     }
 
 
