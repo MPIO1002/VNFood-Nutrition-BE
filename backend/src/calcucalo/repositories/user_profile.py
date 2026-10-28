@@ -14,22 +14,20 @@ from typing import Any
 from ..core.database import PostgresDatabase
 
 _WEIGHT_SCHEMA = """
-CREATE TABLE IF NOT EXISTS weight_logs (
-    id          SERIAL PRIMARY KEY,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    weight_kg   DOUBLE PRECISION NOT NULL CHECK (weight_kg > 0 AND weight_kg <= 700),
-    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    note        TEXT
-);
+-- Adapt existing weight_history table: add note column if missing
+ALTER TABLE weight_history
+    ADD COLUMN IF NOT EXISTS note TEXT;
 
-CREATE INDEX IF NOT EXISTS idx_weight_logs_user_id
-    ON weight_logs(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_weight_logs_recorded_at
-    ON weight_logs(user_id, recorded_at DESC);
-
+-- Add avatar_url to users if not present
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
+-- Ensure indexes
+CREATE INDEX IF NOT EXISTS idx_weight_history_user_id
+    ON weight_history(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_weight_history_recorded_at
+    ON weight_history(user_id, recorded_at DESC);
 """
 
 
@@ -142,19 +140,20 @@ class UserProfileRepository:
         recorded_at: datetime | None = None,
         note: str | None = None,
     ) -> dict[str, Any]:
-        """Insert a new weight measurement and update users.weight.
+        """Insert a new weight measurement into weight_history and update users.weight.
 
-        Returns the newly created weight_log row.
+        Uses the existing weight_history table (legacy). Returns a normalised dict
+        with key ``weight_kg`` mapped from the ``weight`` column.
         """
         self.initialize_schema()
         recorded_at = recorded_at or datetime.utcnow()
         with self.database.connection() as conn, _dict_cursor(conn) as cur:
-            # Insert weight log entry
+            # Insert into existing weight_history table
             cur.execute(
                 """
-                INSERT INTO weight_logs (user_id, weight_kg, recorded_at, note)
+                INSERT INTO weight_history (user_id, weight, recorded_at, note)
                 VALUES (%s, %s, %s, %s)
-                RETURNING id, user_id, weight_kg, recorded_at, note
+                RETURNING id, user_id, weight, recorded_at, note
                 """,
                 (user_id, weight_kg, recorded_at, note),
             )
@@ -162,7 +161,7 @@ class UserProfileRepository:
             if row is None:
                 raise RuntimeError("Failed to insert weight log")
 
-            # Keep users.weight in sync with the latest measurement
+            # Keep users.weight in sync
             cur.execute(
                 """
                 UPDATE users
@@ -174,7 +173,10 @@ class UserProfileRepository:
             if cur.rowcount != 1:
                 raise UserNotFoundError(f"User {user_id} does not exist")
 
-        return dict(row)
+        result = dict(row)
+        # Normalise column name: weight → weight_kg for API consistency
+        result["weight_kg"] = float(result.pop("weight"))
+        return result
 
     # ------------------------------------------------------------------
     # Weight log – read history
@@ -186,20 +188,28 @@ class UserProfileRepository:
         *,
         limit: int = 30,
     ) -> list[dict[str, Any]]:
-        """Return the most recent *limit* weight log entries (newest first)."""
+        """Return the most recent *limit* weight log entries (newest first).
+
+        Reads from the existing weight_history table and normalises the
+        ``weight`` column to ``weight_kg`` for API consistency.
+        """
         self.initialize_schema()
         with self.database.connection() as conn, _dict_cursor(conn) as cur:
             cur.execute(
                 """
-                SELECT id, user_id, weight_kg, recorded_at, note
-                FROM weight_logs
+                SELECT id, user_id, weight, recorded_at, note
+                FROM weight_history
                 WHERE user_id = %s
                 ORDER BY recorded_at DESC, id DESC
                 LIMIT %s
                 """,
                 (user_id, limit),
             )
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(r) for r in cur.fetchall()]
+        # Normalise: weight → weight_kg
+        for row in rows:
+            row["weight_kg"] = float(row.pop("weight"))
+        return rows
 
     # ------------------------------------------------------------------
     # Progress stats – weekly
