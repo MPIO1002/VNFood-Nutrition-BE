@@ -80,7 +80,9 @@ Backend cung cấp:
 - `GET /api/v1/auth/me`
 - `GET /api/v1/auth/health`
 
-Hướng dẫn chi tiết và test thủ công nằm trong [docs/README.md](docs/README.md).
+Xem [tổng quan backend](docs/BACKEND_OVERVIEW.md) để nắm cấu trúc source, luồng xử lý,
+database/migration và trạng thái test. Hướng dẫn JWT chi tiết và test thủ công nằm trong
+[docs/README.md](docs/README.md).
 
 Test console trong `frontend/` cho phép kiểm tra health, register, login, `/me`, refresh,
 logout, logout-all và upload ảnh phân tích trực tiếp trên trình duyệt. FastAPI phục vụ giao diện
