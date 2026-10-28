@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -15,9 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from PIL import UnidentifiedImageError
 
 from ..core.database import database_is_configured
-from ..services.cloudinary_upload import cloudinary_is_configured
 from ..repositories.nutrition import NutritionDB
 from ..services.analyzer import FoodImageAnalyzer
+from ..services.cloudinary_upload import cloudinary_is_configured, upload_image as _cld_upload
 from ..services.detector import create_detector
 from ..services.portion import PortionEstimator
 from ..services.segmenter import create_segmenter
@@ -31,6 +32,7 @@ FRONTEND_ROOT = PROJECT_ROOT.parent / "frontend"
 load_dotenv(PROJECT_ROOT / ".env")
 
 EXPECTED_CLASS_COUNT = 68
+_logger = logging.getLogger(__name__)
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
 app.include_router(auth_router)
 app.include_router(nutrition_meals_router)
@@ -225,7 +227,18 @@ def model_info() -> dict[str, object]:
     }
 
 
-@app.post("/api/v1/food/analyze")
+@app.post(
+    "/api/v1/food/analyze",
+    summary="Analyze food image",
+    description=(
+        "Upload a food image (max 15 MB). Returns detected dishes, nutrition estimates "
+        "and an optional visualization overlay. "
+        "When Cloudinary is configured the original image is automatically uploaded and "
+        "``image_url`` is included in the response. "
+        "Pass ``image_url`` directly to ``POST /api/v1/meals`` so meal logs keep a "
+        "photo reference for history and progress statistics."
+    ),
+)
 async def analyze_food(
     image: Annotated[UploadFile, File()],
     container_type: Annotated[str | None, Form()] = None,
@@ -271,6 +284,31 @@ async def analyze_food(
 
     if visual_base64:
         out["visual_base64"] = visual_base64
+
+    # ------------------------------------------------------------------
+    # Auto-upload original image to Cloudinary (best-effort).
+    #
+    # When Cloudinary is configured, the original food photo is uploaded
+    # and image_url is returned alongside the analysis result.
+    # The frontend should pass this URL to POST /api/v1/meals so that
+    # each meal log has a photo — enabling image display in statistics,
+    # daily/weekly history and progress tracking views.
+    #
+    # Upload failure NEVER blocks the analysis response; image_url is
+    # simply null in that case.
+    # ------------------------------------------------------------------
+    image_url: str | None = None
+    if cloudinary_is_configured():
+        try:
+            filename = image.filename or "food.jpg"
+            image_url = _cld_upload(payload, filename=filename)
+        except Exception:
+            _logger.warning(
+                "Cloudinary upload failed inside food/analyze; continuing without image_url",
+                exc_info=True,
+            )
+
+    out["image_url"] = image_url  # Cloudinary URL or null
 
     return out
 
