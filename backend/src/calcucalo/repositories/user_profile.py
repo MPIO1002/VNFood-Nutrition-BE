@@ -2,16 +2,24 @@
 
 Tables used:
     users           – profile fields (weight, height, bmi, target_calories …)
-    weight_logs     – history of weight updates (created by migration 0007)
+    weight_history  – history of weight updates (created by migration 0007)
     meal_logs       – daily intake aggregates for progress stats
 """
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from ..core.database import PostgresDatabase
+from ..services.metabolism import (
+    UnsafeCalorieTargetError,
+    UnsupportedMetabolismProfileError,
+    calculate_metabolism,
+)
+
+_logger = logging.getLogger(__name__)
 
 _WEIGHT_SCHEMA = """
 -- Adapt existing weight_history table: add note column if missing
@@ -21,6 +29,12 @@ ALTER TABLE weight_history
 -- Add avatar_url to users if not present
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
+-- Add special-condition flags (migration 0008)
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS pregnant_or_breastfeeding    BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS competitive_athlete           BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS metabolism_affecting_condition BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Ensure indexes
 CREATE INDEX IF NOT EXISTS idx_weight_history_user_id
@@ -80,6 +94,9 @@ class UserProfileRepository:
                     bmi,
                     tdee,
                     target_calories,
+                    COALESCE(pregnant_or_breastfeeding, FALSE)     AS pregnant_or_breastfeeding,
+                    COALESCE(competitive_athlete, FALSE)           AS competitive_athlete,
+                    COALESCE(metabolism_affecting_condition, FALSE) AS metabolism_affecting_condition,
                     is_active,
                     created_at,
                     updated_at
@@ -94,7 +111,7 @@ class UserProfileRepository:
         return dict(row)
 
     # ------------------------------------------------------------------
-    # Profile update (avatar, full_name)
+    # Profile update – expanded
     # ------------------------------------------------------------------
 
     def update_profile(
@@ -103,9 +120,30 @@ class UserProfileRepository:
         *,
         full_name: str | None = None,
         avatar_url: str | None = None,
+        weight_kg: float | None = None,
+        height_cm: float | None = None,
+        age: int | None = None,
+        goal: str | None = None,
+        activity_level: str | None = None,
+        pregnant_or_breastfeeding: bool | None = None,
+        competitive_athlete: bool | None = None,
+        metabolism_affecting_condition: bool | None = None,
     ) -> dict[str, Any]:
-        """Update display name and/or avatar URL. Returns updated profile."""
+        """Update user profile fields.
+
+        Rules:
+        - All parameters are optional; omitting one leaves the DB column unchanged.
+        - If weight_kg is supplied it is also written to weight_history.
+        - After saving, when the user has all required fields for Mifflin-St Jeor
+          (weight, height, age, goal, activity_level, sex_for_equation) AND no
+          special-condition flag is True, BMI / TDEE / target_calories are
+          recalculated and written back automatically.
+        """
         self.initialize_schema()
+
+        # ------------------------------------------------------------------ #
+        # 1. Build UPDATE for users table                                     #
+        # ------------------------------------------------------------------ #
         fields: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
         values: list[Any] = []
 
@@ -115,17 +153,108 @@ class UserProfileRepository:
         if avatar_url is not None:
             fields.append("avatar_url = %s")
             values.append(avatar_url)
-
-        if len(fields) == 1:
-            # Nothing to update – just return existing profile
-            return self.get_profile(user_id)
+        if weight_kg is not None:
+            fields.append("weight = %s")
+            values.append(weight_kg)
+        if height_cm is not None:
+            fields.append("height = %s")
+            values.append(height_cm)
+        if age is not None:
+            fields.append("age = %s")
+            values.append(age)
+        if goal is not None:
+            fields.append("goal = %s")
+            values.append(goal)
+        if activity_level is not None:
+            fields.append("activity_level = %s")
+            values.append(activity_level)
+        if pregnant_or_breastfeeding is not None:
+            fields.append("pregnant_or_breastfeeding = %s")
+            values.append(pregnant_or_breastfeeding)
+        if competitive_athlete is not None:
+            fields.append("competitive_athlete = %s")
+            values.append(competitive_athlete)
+        if metabolism_affecting_condition is not None:
+            fields.append("metabolism_affecting_condition = %s")
+            values.append(metabolism_affecting_condition)
 
         values.append(user_id)
         sql = f"UPDATE users SET {', '.join(fields)} WHERE id = %s"
-        with self.database.connection() as conn, conn.cursor() as cur:
+
+        with self.database.connection() as conn, _dict_cursor(conn) as cur:
             cur.execute(sql, values)
             if cur.rowcount != 1:
                 raise UserNotFoundError(f"User {user_id} does not exist")
+
+            # ---------------------------------------------------------------- #
+            # 2. Write weight_history if weight changed                        #
+            # ---------------------------------------------------------------- #
+            if weight_kg is not None:
+                cur.execute(
+                    """
+                    INSERT INTO weight_history (user_id, weight, recorded_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    """,
+                    (user_id, weight_kg),
+                )
+
+            # ---------------------------------------------------------------- #
+            # 3. Fetch full updated row for TDEE recalc decision               #
+            # ---------------------------------------------------------------- #
+            cur.execute(
+                """
+                SELECT weight, height, age, goal, activity_level, sex_for_equation,
+                       COALESCE(pregnant_or_breastfeeding, FALSE)      AS pregnant_or_breastfeeding,
+                       COALESCE(competitive_athlete, FALSE)            AS competitive_athlete,
+                       COALESCE(metabolism_affecting_condition, FALSE)  AS metabolism_affecting_condition
+                FROM users WHERE id = %s
+                """,
+                (user_id,),
+            )
+            u = dict(cur.fetchone())  # type: ignore[arg-type]
+
+        # ------------------------------------------------------------------ #
+        # 4. Recalculate BMI / TDEE / target_calories when possible          #
+        # ------------------------------------------------------------------ #
+        has_special_condition = (
+            u["pregnant_or_breastfeeding"]
+            or u["competitive_athlete"]
+            or u["metabolism_affecting_condition"]
+        )
+        has_required = all([
+            u["weight"], u["height"], u["age"],
+            u["goal"], u["activity_level"], u["sex_for_equation"],
+        ])
+
+        if has_required and not has_special_condition:
+            try:
+                result = calculate_metabolism(
+                    sex_for_equation=u["sex_for_equation"],
+                    age=int(u["age"]),
+                    height_cm=float(u["height"]),
+                    weight_kg=float(u["weight"]),
+                    activity_level=u["activity_level"],
+                    goal=u["goal"],
+                )
+                with self.database.connection() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE users
+                        SET bmi = %s, tdee = %s, target_calories = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        """,
+                        (result.bmi, result.estimated_tdee_kcal_per_day,
+                         result.target_kcal_per_day, user_id),
+                    )
+            except (UnsafeCalorieTargetError, UnsupportedMetabolismProfileError,
+                    ValueError):
+                # Data present but outside safe range — skip recalc silently
+                _logger.debug(
+                    "TDEE recalc skipped for user %s: profile outside supported range",
+                    user_id,
+                )
+
         return self.get_profile(user_id)
 
     # ------------------------------------------------------------------

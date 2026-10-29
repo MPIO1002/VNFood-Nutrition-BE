@@ -43,6 +43,9 @@ FAKE_PROFILE = {
     "bmi": None,
     "tdee": None,
     "target_calories": None,
+    "pregnant_or_breastfeeding": False,
+    "competitive_athlete": False,
+    "metabolism_affecting_condition": False,
     "is_active": True,
     "created_at": datetime(2025, 1, 1),
     "updated_at": datetime(2025, 1, 1),
@@ -118,6 +121,78 @@ def test_update_profile_avatar(client, mock_repo):
 
 def test_update_profile_blank_name_rejected(client, mock_repo):
     resp = client.patch("/api/v1/profile", json={"full_name": "   "})
+    assert resp.status_code == 422
+
+
+def test_update_profile_empty_body_rejected(client, mock_repo):
+    """Empty PATCH body must return 422 — nothing to update."""
+    resp = client.patch("/api/v1/profile", json={})
+    assert resp.status_code == 422
+
+
+def test_update_profile_weight_only(client, mock_repo):
+    """Sending only weight_kg triggers weight_history write and returns profile."""
+    updated = {**FAKE_PROFILE, "weight": 65.0}
+    mock_repo.update_profile.return_value = updated
+    resp = client.patch("/api/v1/profile", json={"weight_kg": 65.0})
+    assert resp.status_code == 200
+    mock_repo.update_profile.assert_called_once()
+    call_kwargs = mock_repo.update_profile.call_args.kwargs
+    assert call_kwargs["weight_kg"] == 65.0
+
+
+def test_update_profile_height_only(client, mock_repo):
+    updated = {**FAKE_PROFILE, "height": 170.0}
+    mock_repo.update_profile.return_value = updated
+    resp = client.patch("/api/v1/profile", json={"height_cm": 170.0})
+    assert resp.status_code == 200
+    call_kwargs = mock_repo.update_profile.call_args.kwargs
+    assert call_kwargs["height_cm"] == 170.0
+
+
+def test_update_profile_goal_activity(client, mock_repo):
+    updated = {**FAKE_PROFILE, "goal": "lose_weight", "activity_level": "moderate"}
+    mock_repo.update_profile.return_value = updated
+    resp = client.patch(
+        "/api/v1/profile",
+        json={"goal": "lose_weight", "activity_level": "moderate"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["goal"] == "lose_weight"
+    assert data["activity_level"] == "moderate"
+
+
+def test_update_profile_invalid_goal(client, mock_repo):
+    resp = client.patch("/api/v1/profile", json={"goal": "fly_to_moon"})
+    assert resp.status_code == 422
+
+
+def test_update_profile_invalid_activity(client, mock_repo):
+    resp = client.patch("/api/v1/profile", json={"activity_level": "super_active"})
+    assert resp.status_code == 422
+
+
+def test_update_profile_special_condition_stored(client, mock_repo):
+    """Special-condition flags are accepted and forwarded to the repository."""
+    updated = {**FAKE_PROFILE, "pregnant_or_breastfeeding": True}
+    mock_repo.update_profile.return_value = updated
+    resp = client.patch(
+        "/api/v1/profile",
+        json={"pregnant_or_breastfeeding": True},
+    )
+    assert resp.status_code == 200
+    call_kwargs = mock_repo.update_profile.call_args.kwargs
+    assert call_kwargs["pregnant_or_breastfeeding"] is True
+
+
+def test_update_profile_age_out_of_range(client, mock_repo):
+    resp = client.patch("/api/v1/profile", json={"age": 0})
+    assert resp.status_code == 422
+
+
+def test_update_profile_weight_too_heavy(client, mock_repo):
+    resp = client.patch("/api/v1/profile", json={"weight_kg": 800})
     assert resp.status_code == 422
 
 

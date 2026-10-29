@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.database import get_database
 from ..repositories.user_profile import UserNotFoundError, UserProfileRepository
@@ -57,11 +57,51 @@ class ImageUploadResponse(BaseModel):
     content_type: str
 
 
+_GOAL_VALUES = Literal["lose_weight", "maintain_weight", "gain_weight"]
+_ACTIVITY_VALUES = Literal["sedentary", "light", "moderate", "active", "very_active"]
+
+
 class ProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    # Basic info
     full_name: str | None = Field(default=None, max_length=120)
     avatar_url: str | None = Field(default=None, max_length=2048)
+
+    # Body metrics
+    weight_kg: float | None = Field(
+        default=None, gt=0, le=700, allow_inf_nan=False,
+        description="Body weight in kg; also logged to weight_history",
+    )
+    height_cm: float | None = Field(
+        default=None, gt=100, le=250, allow_inf_nan=False,
+        description="Height in centimetres",
+    )
+    age: int | None = Field(default=None, ge=1, le=120, description="Age in years")
+
+    # Goals
+    goal: _GOAL_VALUES | None = Field(  # type: ignore[valid-type]
+        default=None,
+        description="lose_weight | maintain_weight | gain_weight",
+    )
+    activity_level: _ACTIVITY_VALUES | None = Field(  # type: ignore[valid-type]
+        default=None,
+        description="sedentary | light | moderate | active | very_active",
+    )
+
+    # Special-condition flags (stored in DB; skip TDEE recalc when any is True)
+    pregnant_or_breastfeeding: bool | None = Field(
+        default=None,
+        description="True → Mifflin-St Jeor not appropriate; TDEE recalc is skipped",
+    )
+    competitive_athlete: bool | None = Field(
+        default=None,
+        description="True → specialist assessment needed; TDEE recalc is skipped",
+    )
+    metabolism_affecting_condition: bool | None = Field(
+        default=None,
+        description="True → medical condition/medication; TDEE recalc is skipped",
+    )
 
     @field_validator("full_name")
     @classmethod
@@ -69,6 +109,20 @@ class ProfileUpdateRequest(BaseModel):
         if value is not None and len(value.strip()) == 0:
             raise ValueError("full_name must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "ProfileUpdateRequest":
+        """Reject an empty PATCH body — nothing to update."""
+        provided = {
+            f
+            for f, v in self.__dict__.items()
+            if not f.startswith("_") and v is not None
+        }
+        if not provided:
+            raise ValueError(
+                "Request body must contain at least one field to update"
+            )
+        return self
 
 
 class ProfileResponse(BaseModel):
@@ -86,6 +140,9 @@ class ProfileResponse(BaseModel):
     bmi: float | None
     tdee: float | None
     target_calories: float | None
+    pregnant_or_breastfeeding: bool
+    competitive_athlete: bool
+    metabolism_affecting_condition: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -266,10 +323,14 @@ def get_profile(
 @router.patch(
     "/profile",
     response_model=ProfileResponse,
-    summary="Update profile (full_name and/or avatar_url)",
+    summary="Update profile",
     description=(
-        "Partially update the authenticated user's display name or avatar URL. "
-        "To set the avatar after uploading via POST /upload/image, pass the returned URL here."
+        "Partially update the authenticated user's profile. "
+        "At least one field must be provided — an empty body returns 422. "
+        "When weight_kg is supplied it is also recorded in weight_history. "
+        "If the user has sufficient data (weight, height, age, goal, activity_level, sex) "
+        "and no special-condition flag is True, BMI / TDEE / target_calories are "
+        "recalculated automatically."
     ),
 )
 def update_profile(
@@ -282,6 +343,14 @@ def update_profile(
             int(current_user["id"]),
             full_name=request.full_name,
             avatar_url=request.avatar_url,
+            weight_kg=request.weight_kg,
+            height_cm=request.height_cm,
+            age=request.age,
+            goal=request.goal,
+            activity_level=request.activity_level,
+            pregnant_or_breastfeeding=request.pregnant_or_breastfeeding,
+            competitive_athlete=request.competitive_athlete,
+            metabolism_affecting_condition=request.metabolism_affecting_condition,
         )
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
