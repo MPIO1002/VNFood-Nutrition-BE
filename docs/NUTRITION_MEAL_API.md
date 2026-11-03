@@ -159,7 +159,28 @@ Content-Type: application/json
 Authorization: Bearer <access_token>
 ```
 
-#### Ví dụ Body: Người dùng muốn giảm 5 kg
+#### 4.1 Nhập cân nặng và chiều cao — hai phong cách (chọn 1)
+
+API hỗ trợ hai cách nhập cân nặng và chiều cao:
+
+| Phong cách | Trường | Đơn vị | Ghi chú |
+| --- | --- | --- | --- |
+| **Legacy** (backward-compat) | `weight_kg` | kg | Vẫn hoạt động như cũ |
+| **Legacy** (backward-compat) | `height_cm` | cm | Vẫn hoạt động như cũ |
+| **Mới — multi-unit** | `weight` + `weight_unit` | `"kg"` hoặc `"lbs"` | `weight_unit` mặc định `"kg"` nếu bỏ qua |
+| **Mới — multi-unit** | `height` + `height_unit` | `"cm"` hoặc `"ft"` | `height_unit` mặc định `"cm"` nếu bỏ qua |
+
+> **Lưu ý:** Không được gửi cả `weight_kg` lẫn `weight` (hoặc cả `height_cm` lẫn `height`) cùng một lúc — API sẽ trả `422`.
+
+Hằng số quy đổi nội bộ:
+- `1 lbs = 0.453592 kg`
+- `1 ft = 30.48 cm`
+
+Sau khi quy đổi sang kg/cm, API áp dụng cùng ngưỡng hợp lệ:
+- Cân nặng quy đổi: **25–400 kg**
+- Chiều cao quy đổi: **(100, 250] cm**
+
+#### Ví dụ Body: kg + cm (legacy — vẫn hoạt động)
 ```json
 {
   "sex_for_equation": "male",
@@ -176,12 +197,36 @@ Authorization: Bearer <access_token>
 }
 ```
 
+#### Ví dụ Body: lbs + ft (phong cách mới)
+```json
+{
+  "sex_for_equation": "male",
+  "age": 30,
+  "height": 5.74,
+  "height_unit": "ft",
+  "weight": 154,
+  "weight_unit": "lbs",
+  "activity_level": "moderate",
+  "goal": "lose_weight",
+  "weight_change_kg": 5.0,
+  "goal_pace": "standard"
+}
+```
+
+> Response luôn trả về `height_cm` và `weight_kg` theo **đơn vị SI (kg / cm)** sau khi quy đổi, bất kể client gửi đơn vị gì.
+
+#### Bảng trường đầy đủ
+
 | Trường | Kiểu | Bắt buộc | Quy tắc |
 | --- | --- | --- | --- |
 | `sex_for_equation` | string | Có | `male` hoặc `female`; dùng chọn hằng số công thức |
 | `age` | integer | Có | 18–120 |
-| `height_cm` | number | Có | `>100` và `<=250` |
-| `weight_kg` | number | Có | `>25` và `<=400` |
+| `height_cm` | number\|null | Có (1 trong 2) | `>100` và `<=250`; **legacy style** |
+| `height` | number\|null | Có (1 trong 2) | Giá trị chiều cao; đơn vị xác định bởi `height_unit` |
+| `height_unit` | string | Không | `"cm"` (mặc định) hoặc `"ft"` |
+| `weight_kg` | number\|null | Có (1 trong 2) | `>25` và `<=400`; **legacy style** |
+| `weight` | number\|null | Có (1 trong 2) | Giá trị cân nặng; đơn vị xác định bởi `weight_unit` |
+| `weight_unit` | string | Không | `"kg"` (mặc định) hoặc `"lbs"` |
 | `activity_level` | string | Có | Một trong năm mức ở trên (`sedentary`, `light`, `moderate`, `active`, `very_active`) |
 | `goal` | string | Có | `lose_weight`, `maintain_weight`, `gain_weight` |
 | `weight_change_kg` | number/null | Không | Số kg muốn giảm hoặc tăng (`0–100`). Bỏ qua hoặc `0` khi `maintain_weight` |

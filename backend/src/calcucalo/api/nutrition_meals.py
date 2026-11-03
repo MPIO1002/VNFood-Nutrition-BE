@@ -61,7 +61,42 @@ class CalorieSource(str, Enum):
     MANUAL = "manual"
 
 
+# ---------------------------------------------------------------------------
+# Unit enums for weight / height input
+# ---------------------------------------------------------------------------
+
+# Conversion constants
+_LBS_TO_KG = 0.453592   # 1 lb  = 0.453592 kg
+_FT_TO_CM  = 30.48      # 1 ft  = 30.48 cm
+
+
+class WeightUnit(str, Enum):
+    KG  = "kg"
+    LBS = "lbs"
+
+
+class HeightUnit(str, Enum):
+    CM = "cm"
+    FT = "ft"
+
+
 class MetabolismRequest(BaseModel):
+    """Request body for POST /api/v1/nutrition/calculate.
+
+    Supports two input styles — legacy and new — for weight and height:
+
+    Legacy (backward-compatible):
+        weight_kg: float   – weight in kilograms
+        height_cm: float   – height in centimetres
+
+    New (flexible units):
+        weight: float         – value in any unit
+        weight_unit: "kg" | "lbs"   – default "kg"
+        height: float         – value in any unit
+        height_unit: "cm" | "ft"    – default "cm"
+
+    Do NOT mix both styles for the same dimension (e.g. weight_kg + weight).
+    """
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     sex_for_equation: SexForEquation = Field(
@@ -72,8 +107,49 @@ class MetabolismRequest(BaseModel):
         ),
     )
     age: int = Field(ge=18, le=120)
-    height_cm: float = Field(gt=100, le=250, allow_inf_nan=False)
-    weight_kg: float = Field(gt=25, le=400, allow_inf_nan=False)
+
+    # ------------------------------------------------------------------
+    # Height input — legacy OR new style
+    # ------------------------------------------------------------------
+    height_cm: float | None = Field(
+        default=None,
+        gt=100, le=250, allow_inf_nan=False,
+        description=(
+            "Height in centimetres (legacy field). "
+            "Use 'height' + 'height_unit' instead for multi-unit support."
+        ),
+    )
+    height: float | None = Field(
+        default=None,
+        gt=0, allow_inf_nan=False,
+        description="Height value; unit set by height_unit (default 'cm').",
+    )
+    height_unit: HeightUnit = Field(
+        default=HeightUnit.CM,
+        description="Unit of the 'height' field: 'cm' (default) or 'ft'.",
+    )
+
+    # ------------------------------------------------------------------
+    # Weight input — legacy OR new style
+    # ------------------------------------------------------------------
+    weight_kg: float | None = Field(
+        default=None,
+        gt=25, le=400, allow_inf_nan=False,
+        description=(
+            "Weight in kilograms (legacy field). "
+            "Use 'weight' + 'weight_unit' instead for multi-unit support."
+        ),
+    )
+    weight: float | None = Field(
+        default=None,
+        gt=0, allow_inf_nan=False,
+        description="Weight value; unit set by weight_unit (default 'kg').",
+    )
+    weight_unit: WeightUnit = Field(
+        default=WeightUnit.KG,
+        description="Unit of the 'weight' field: 'kg' (default) or 'lbs'.",
+    )
+
     activity_level: ActivityLevel = Field(
         description=(
             "sedentary: little exercise; light: 1-3 days/week; moderate: 3-5; "
@@ -85,13 +161,12 @@ class MetabolismRequest(BaseModel):
         default=None,
         ge=0,
         le=100,
-        description="Target amount of weight to lose or gain in kg. Omit or 0 for maintain_weight.",
+        description="Target weight change in kg. Omit or 0 for maintain_weight.",
     )
     goal_pace: GoalPace | None = Field(
         default=None,
         description=(
-            "gradual applies 250 kcal/day and standard applies 500 kcal/day; "
-            "omit for maintain_weight"
+            "gradual = -250 kcal/day; standard = -500 kcal/day; omit for maintain_weight"
         ),
     )
     pregnant_or_breastfeeding: bool = Field(
@@ -105,8 +180,61 @@ class MetabolismRequest(BaseModel):
         description="A relevant medical condition or medication; true returns 422",
     )
 
+    # Resolved values (set by validator)
+    _resolved_weight_kg: float = 0.0
+    _resolved_height_cm: float = 0.0
+
     @model_validator(mode="after")
-    def validate_goal_pace(self) -> MetabolismRequest:
+    def resolve_units_and_validate(self) -> "MetabolismRequest":
+        # ---- weight -------------------------------------------------- #
+        if self.weight_kg is not None and self.weight is not None:
+            raise ValueError(
+                "Supply 'weight_kg' (legacy) OR 'weight' + 'weight_unit', not both."
+            )
+        if self.weight_kg is not None:
+            resolved_w = float(self.weight_kg)
+        elif self.weight is not None:
+            resolved_w = (
+                round(self.weight * _LBS_TO_KG, 4)
+                if self.weight_unit == WeightUnit.LBS
+                else float(self.weight)
+            )
+        else:
+            raise ValueError("Provide 'weight_kg' or 'weight' + 'weight_unit'.")
+
+        if not (25 <= resolved_w <= 400):
+            raise ValueError(
+                f"Resolved weight {resolved_w:.1f} kg is outside [25, 400] kg. "
+                f"You supplied {self.weight or self.weight_kg} "
+                f"{self.weight_unit.value if self.weight is not None else 'kg'}."
+            )
+        object.__setattr__(self, "_resolved_weight_kg", resolved_w)
+
+        # ---- height -------------------------------------------------- #
+        if self.height_cm is not None and self.height is not None:
+            raise ValueError(
+                "Supply 'height_cm' (legacy) OR 'height' + 'height_unit', not both."
+            )
+        if self.height_cm is not None:
+            resolved_h = float(self.height_cm)
+        elif self.height is not None:
+            resolved_h = (
+                round(self.height * _FT_TO_CM, 4)
+                if self.height_unit == HeightUnit.FT
+                else float(self.height)
+            )
+        else:
+            raise ValueError("Provide 'height_cm' or 'height' + 'height_unit'.")
+
+        if not (100 < resolved_h <= 250):
+            raise ValueError(
+                f"Resolved height {resolved_h:.1f} cm is outside (100, 250] cm. "
+                f"You supplied {self.height or self.height_cm} "
+                f"{self.height_unit.value if self.height is not None else 'cm'}."
+            )
+        object.__setattr__(self, "_resolved_height_cm", resolved_h)
+
+        # ---- goal / pace consistency --------------------------------- #
         if self.goal == NutritionGoal.MAINTAIN_WEIGHT:
             if self.goal_pace is not None:
                 raise ValueError("goal_pace must be omitted when goal is maintain_weight")
@@ -259,8 +387,8 @@ def calculate_daily_nutrition(
         result = calculate_metabolism(
             sex_for_equation=request.sex_for_equation.value,
             age=request.age,
-            height_cm=request.height_cm,
-            weight_kg=request.weight_kg,
+            height_cm=request._resolved_height_cm,
+            weight_kg=request._resolved_weight_kg,
             activity_level=request.activity_level.value,
             goal=request.goal.value,
             goal_pace=request.goal_pace.value if request.goal_pace else None,
@@ -280,8 +408,8 @@ def calculate_daily_nutrition(
             user_id=user_id,
             sex_for_equation=request.sex_for_equation.value,
             age=request.age,
-            height_cm=request.height_cm,
-            weight_kg=request.weight_kg,
+            height_cm=request._resolved_height_cm,
+            weight_kg=request._resolved_weight_kg,
             activity_level=request.activity_level.value,
             goal=request.goal.value,
             bmi=result.bmi,
@@ -297,8 +425,8 @@ def calculate_daily_nutrition(
         "user_id": user_id,
         "sex_for_equation": request.sex_for_equation,
         "age": request.age,
-        "height_cm": request.height_cm,
-        "weight_kg": request.weight_kg,
+        "height_cm": request._resolved_height_cm,
+        "weight_kg": request._resolved_weight_kg,
         "activity_level": request.activity_level,
         "goal": request.goal,
         **_metabolism_payload(result),
