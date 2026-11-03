@@ -87,7 +87,7 @@ Swagger sinh tự động tại `http://127.0.0.1:8000/docs` khi server chạy.
 | Auth | `POST /api/v1/auth/logout` | Refresh token trong JSON | Thu hồi một refresh token |
 | Auth | `POST /api/v1/auth/logout-all` | Access token | Thu hồi toàn bộ refresh token của user |
 | Auth | `GET /api/v1/auth/me` | Access token | Lấy user hiện tại |
-| Nutrition | `POST /api/v1/nutrition/calculate` | Access token | Tính và lưu profile BMI/RMR/TDEE/mục tiêu |
+| Nutrition | `POST /api/v1/nutrition/calculate` | Access token | Tính và lưu profile BMI/RMR/TDEE/mục tiêu; hỗ trợ đơn vị kg/lbs và cm/ft |
 | Meals | `POST /api/v1/meals` | Access token | Tạo meal log từ catalog món hoặc kcal/macro nhập tay |
 | Meals | `GET /api/v1/meals/daily?date=YYYY-MM-DD` | Access token | Lấy bữa ăn, tổng và phần còn lại trong một ngày |
 
@@ -145,6 +145,7 @@ Client -- Authorization: Bearer access JWT --> endpoint bảo vệ
 
 ```text
 POST /nutrition/calculate + access token
+  -> validate đơn vị (đổi lbs->kg và ft->cm nếu cần)
   -> validate người trưởng thành, activity, goal và các trường hợp không hỗ trợ
   -> services/metabolism.py
       BMI = kg / m²
@@ -154,6 +155,7 @@ POST /nutrition/calculate + access token
       macro target = tỷ lệ protein/carb/fat theo goal
   -> repositories/nutrition_tracking.py cập nhật profile users
   <- chỉ số, target kcal/macro, thời gian ước tính và cảnh báo
+     (response luôn dùng đơn vị SI: weight_kg và height_cm)
 ```
 
 Đây là **ước tính cho người trưởng thành khỏe mạnh**, không phải chẩn đoán hoặc đơn
