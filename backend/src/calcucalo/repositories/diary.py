@@ -1,19 +1,14 @@
 """Repository: Diary photo-grid queries.
 
 Cung cấp dữ liệu cho 2 API:
-  GET /api/v1/diary/weekly   – lưới ảnh theo tuần
-  GET /api/v1/diary/monthly  – lưới ảnh theo tháng
+  GET /api/v1/diary/weekly   – lưới ảnh nhóm theo tuần
+  GET /api/v1/diary/monthly  – lưới ảnh nhóm theo tháng
 
-Mỗi ô lưới = 1 ngày:
-  - representative_image_url: ảnh đầu tiên có trong ngày (hoặc null)
-  - has_meals: True nếu có bữa ăn
-  - total_kcal, meal_count
-  - total_protein_g, total_fat_g, total_carb_g
-
-Summary toàn màn hình:
-  - streak_days: số ngày liên tiếp có ăn tính từ hôm nay
-  - total_meals_logged: tổng bữa ăn đã log (hiển thị là "Locket Calo")
-  - avg_protein_g / avg_carb_g / avg_fat_g: trung bình daily macro trong kỳ
+Hành vi mới (v2):
+  - Nhận start/end date thay vì số tuần/tháng.
+  - Chỉ trả những ngày CÓ bữa ăn trong mảng days[].
+    Ngày không có meal không xuất hiện → has_meals field bị bỏ.
+  - avg_daily_kcal tính trên ngày có ăn, không chia đều toàn kỳ.
 """
 from __future__ import annotations
 
@@ -35,11 +30,14 @@ class DiaryRepository:
         self,
         user_id: int,
         start_date: date,
-        end_date: date,   # exclusive
+        end_date_excl: date,
     ) -> dict[date, dict[str, Any]]:
-        """Fetch per-day aggregates (meals, kcal, macros, best image)."""
+        """Fetch per-day aggregates (meals, kcal, macros, best image).
+
+        Returns a dict keyed by date — only dates that HAVE meal logs.
+        """
         start_dt = datetime.combine(start_date, time.min)
-        end_dt = datetime.combine(end_date, time.min)
+        end_dt = datetime.combine(end_date_excl, time.min)
 
         with self.database.connection() as conn:
             from psycopg2.extras import RealDictCursor
@@ -91,27 +89,12 @@ class DiaryRepository:
         user_id: int,
         today: date,
         start_date: date,
-        end_date: date,   # exclusive
+        end_date_excl: date,
     ) -> dict[str, Any]:
-        """Compute streak and period-wide summary stats."""
+        """Compute streak (all-time) and period-wide summary stats."""
         with self.database.connection() as conn:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # All logged dates in period
-                cur.execute(
-                    """
-                    SELECT DISTINCT consumed_at::date AS log_date
-                    FROM   meal_logs
-                    WHERE  user_id = %s
-                      AND  consumed_at >= %s
-                      AND  consumed_at <  %s
-                    ORDER  BY log_date DESC
-                    """,
-                    (user_id, datetime.combine(start_date, time.min),
-                     datetime.combine(end_date, time.min)),
-                )
-                period_dates = {row["log_date"] for row in cur.fetchall()}
-
                 # All logged dates ever (for streak from today)
                 cur.execute(
                     """
@@ -126,7 +109,7 @@ class DiaryRepository:
                     {row["log_date"] for row in cur.fetchall()}, reverse=True
                 )
 
-                # Period totals
+                # Period totals (avg only over days that have meals)
                 cur.execute(
                     """
                     SELECT
@@ -141,8 +124,7 @@ class DiaryRepository:
                             SUM(total_calories)                     AS daily_kcal,
                             SUM(COALESCE(protein_g, 0))             AS daily_protein,
                             SUM(COALESCE(fat_g,     0))             AS daily_fat,
-                            SUM(COALESCE(carb_g,    0))             AS daily_carb,
-                            COUNT(*)                                AS meals_on_day
+                            SUM(COALESCE(carb_g,    0))             AS daily_carb
                         FROM   meal_logs
                         WHERE  user_id = %s
                           AND  consumed_at >= %s
@@ -151,7 +133,7 @@ class DiaryRepository:
                     ) daily
                     """,
                     (user_id, datetime.combine(start_date, time.min),
-                     datetime.combine(end_date, time.min)),
+                     datetime.combine(end_date_excl, time.min)),
                 )
                 totals = dict(cur.fetchone() or {})
 
@@ -182,22 +164,13 @@ class DiaryRepository:
         }
 
     @staticmethod
-    def _day_cell(d: date, data: dict[date, dict[str, Any]]) -> dict[str, Any]:
-        row = data.get(d)
-        if row:
-            return {
-                "date":                     d.isoformat(),
-                "has_meals":                True,
-                "meal_count":               row["meal_count"],
-                "total_kcal":               row["total_kcal"],
-                "representative_image_url": row["representative_image_url"],
-            }
+    def _day_cell(d: date, row: dict[str, Any]) -> dict[str, Any]:
+        """Build a day-cell dict from a row that IS known to have meals."""
         return {
             "date":                     d.isoformat(),
-            "has_meals":                False,
-            "meal_count":               0,
-            "total_kcal":               0.0,
-            "representative_image_url": None,
+            "meal_count":               row["meal_count"],
+            "total_kcal":               row["total_kcal"],
+            "representative_image_url": row["representative_image_url"],
         }
 
     # ------------------------------------------------------------------
@@ -208,69 +181,81 @@ class DiaryRepository:
         self,
         user_id: int,
         *,
-        weeks: int = 4,
+        start: date,
+        end: date,       # inclusive
         today: date | None = None,
     ) -> dict[str, Any]:
-        """Return diary grid grouped by week.
+        """Return diary grid grouped by week for [start, end] (inclusive).
 
-        Each week contains 7 day-cells (Mon-Sun) with photo + kcal.
-        Includes overall summary (streak, macros) across the entire period.
+        - Weeks are Mon-Sun. If start/end don't align to Mon/Sun the
+          boundary week is partial (shows only days within range).
+        - Only days with meal logs appear in days[].
+        - avg_daily_kcal is averaged over days-with-meals only.
         """
         today = today or date.today()
-        weeks = min(max(weeks, 1), 52)
+        end_excl = end + timedelta(days=1)
 
-        # Monday of current week
-        week_start = today - timedelta(days=today.weekday())
-        period_start = week_start - timedelta(weeks=weeks - 1)
-        period_end = week_start + timedelta(days=7)   # exclusive
+        daily_data = self._fetch_daily_data(user_id, start, end_excl)
+        summary = self._streak_and_summary(user_id, today, start, end_excl)
 
-        daily_data = self._fetch_daily_data(user_id, period_start, period_end)
-        summary = self._streak_and_summary(user_id, today, period_start, period_end)
+        # Walk from the Monday on-or-before `start` up to `end`
+        week_monday = start - timedelta(days=start.weekday())
+        VN_DAYS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
 
         weeks_list: list[dict[str, Any]] = []
-        for i in range(weeks - 1, -1, -1):
-            w_start = week_start - timedelta(weeks=i)
-            w_end = w_start + timedelta(days=6)       # inclusive Sunday
+        cursor = week_monday
+        while cursor <= end:
+            w_start = cursor
+            w_end = cursor + timedelta(days=6)
+            # Clamp to requested range for label purposes
+            effective_start = max(w_start, start)
+            effective_end = min(w_end, end)
 
-            days_with_meals = [
-                d for d in (w_start + timedelta(days=j) for j in range(7))
-                if d in daily_data
-            ]
-            week_kcal = sum(daily_data[d]["total_kcal"] for d in days_with_meals)
-            avg_daily = (
-                round(week_kcal / len(days_with_meals), 1)
-                if days_with_meals else 0.0
-            )
-
-            # Vietnamese short day labels
-            VN_DAYS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
-            day_cells = []
+            # Build day cells — only days with data
+            day_cells: list[dict[str, Any]] = []
+            days_with_meals_in_week: list[date] = []
             for j in range(7):
                 d = w_start + timedelta(days=j)
-                cell = self._day_cell(d, daily_data)
-                cell["day_label"] = VN_DAYS[j]
-                day_cells.append(cell)
+                if d < start or d > end:
+                    continue        # outside requested range
+                if d in daily_data:
+                    cell = self._day_cell(d, daily_data[d])
+                    cell["day_label"] = VN_DAYS[j]
+                    day_cells.append(cell)
+                    days_with_meals_in_week.append(d)
+
+            week_kcal = sum(daily_data[d]["total_kcal"] for d in days_with_meals_in_week)
+            avg_daily = (
+                round(week_kcal / len(days_with_meals_in_week), 1)
+                if days_with_meals_in_week else 0.0
+            )
 
             weeks_list.append({
-                "week_label":    f"Tuần {weeks - i} · {w_start.strftime('%d/%m')} – {w_end.strftime('%d/%m/%Y')}",
-                "week_start":    w_start.isoformat(),
-                "week_end":      w_end.isoformat(),
-                "days_logged":   len(days_with_meals),
-                "total_kcal":    round(week_kcal, 1),
+                "week_label":     (
+                    f"Tuần {effective_start.strftime('%d/%m')} "
+                    f"– {effective_end.strftime('%d/%m/%Y')}"
+                ),
+                "week_start":     effective_start.isoformat(),
+                "week_end":       effective_end.isoformat(),
+                "days_logged":    len(days_with_meals_in_week),
+                "total_kcal":     round(week_kcal, 1),
                 "avg_daily_kcal": avg_daily,
-                "days":          day_cells,
+                "days":           day_cells,
             })
 
+            cursor += timedelta(weeks=1)
+
         return {
-            "user_id":            user_id,
-            "weeks":              weeks,
-            "streak_days":        summary["streak_days"],
-            "total_meals_logged": summary["total_meals_logged"],
-            "avg_daily_kcal":     summary["avg_daily_kcal"],
+            "user_id":             user_id,
+            "start_date":          start.isoformat(),
+            "end_date":            end.isoformat(),
+            "streak_days":         summary["streak_days"],
+            "total_meals_logged":  summary["total_meals_logged"],
+            "avg_daily_kcal":      summary["avg_daily_kcal"],
             "avg_daily_protein_g": summary["avg_daily_protein_g"],
-            "avg_daily_fat_g":    summary["avg_daily_fat_g"],
-            "avg_daily_carb_g":   summary["avg_daily_carb_g"],
-            "data":               weeks_list,
+            "avg_daily_fat_g":     summary["avg_daily_fat_g"],
+            "avg_daily_carb_g":    summary["avg_daily_carb_g"],
+            "data":                weeks_list,
         }
 
     # ------------------------------------------------------------------
@@ -281,77 +266,61 @@ class DiaryRepository:
         self,
         user_id: int,
         *,
-        months: int = 2,
+        start: date,
+        end: date,       # inclusive
         today: date | None = None,
     ) -> dict[str, Any]:
-        """Return diary grid grouped by calendar month.
+        """Return diary grid grouped by calendar month for [start, end].
 
-        Each month contains one cell per calendar day with photo + kcal.
-        Includes overall summary (streak, macros) across the entire period.
+        - Only days with meal logs appear in days[].
+        - avg_daily_kcal is averaged over days-with-meals only.
         """
         today = today or date.today()
-        months = min(max(months, 1), 24)
+        end_excl = end + timedelta(days=1)
 
-        current_month_start = today.replace(day=1)
+        daily_data = self._fetch_daily_data(user_id, start, end_excl)
+        summary = self._streak_and_summary(user_id, today, start, end_excl)
 
-        # Compute period_start (first day of oldest month)
-        y = current_month_start.year
-        m = current_month_start.month - (months - 1)
-        while m <= 0:
-            m += 12
-            y -= 1
-        period_start = date(y, m, 1)
+        VN_MONTHS = [
+            "", "tháng 1", "tháng 2", "tháng 3", "tháng 4",
+            "tháng 5", "tháng 6", "tháng 7", "tháng 8",
+            "tháng 9", "tháng 10", "tháng 11", "tháng 12",
+        ]
 
-        # period_end = first day of next month after today
-        nm = current_month_start.month % 12 + 1
-        ny = current_month_start.year + (1 if current_month_start.month == 12 else 0)
-        period_end = date(ny, nm, 1)
-
-        daily_data = self._fetch_daily_data(user_id, period_start, period_end)
-        summary = self._streak_and_summary(user_id, today, period_start, period_end)
-
+        # Walk month by month from start's month to end's month
         months_list: list[dict[str, Any]] = []
-        for i in range(months - 1, -1, -1):
-            my = current_month_start.year
-            mm = current_month_start.month - i
-            while mm <= 0:
-                mm += 12
-                my -= 1
-            m_start = date(my, mm, 1)
-
-            # Days in month
-            next_m = mm % 12 + 1
-            next_y = my + (1 if mm == 12 else 0)
-            m_end_excl = date(next_y, next_m, 1)
+        m_start = start.replace(day=1)
+        while m_start <= end:
+            # end of this month (exclusive)
+            nm = m_start.month % 12 + 1
+            ny = m_start.year + (1 if m_start.month == 12 else 0)
+            m_end_excl = date(ny, nm, 1)
             days_in_month = (m_end_excl - m_start).days
 
-            days_with_meals = [
-                m_start + timedelta(days=j)
-                for j in range(days_in_month)
-                if (m_start + timedelta(days=j)) in daily_data
-            ]
+            # Clamp to requested range
+            effective_start = max(m_start, start)
+            effective_end = min(m_end_excl - timedelta(days=1), end)
+
+            # Build day cells — only days with data within effective range
+            day_cells: list[dict[str, Any]] = []
+            days_with_meals: list[date] = []
+            for j in range(days_in_month):
+                d = m_start + timedelta(days=j)
+                if d < effective_start or d > effective_end:
+                    continue    # outside requested range
+                if d in daily_data:
+                    day_cells.append(self._day_cell(d, daily_data[d]))
+                    days_with_meals.append(d)
+
             month_kcal = sum(daily_data[d]["total_kcal"] for d in days_with_meals)
             avg_daily = (
                 round(month_kcal / len(days_with_meals), 1)
                 if days_with_meals else 0.0
             )
 
-            day_cells = [
-                self._day_cell(m_start + timedelta(days=j), daily_data)
-                for j in range(days_in_month)
-            ]
-
-            # Vietnamese month header: "tháng 10 2026"
-            VN_MONTHS = [
-                "", "tháng 1", "tháng 2", "tháng 3", "tháng 4",
-                "tháng 5", "tháng 6", "tháng 7", "tháng 8",
-                "tháng 9", "tháng 10", "tháng 11", "tháng 12",
-            ]
-            month_label = f"{VN_MONTHS[mm]} {my}"
-
             months_list.append({
-                "month_label":   month_label,
-                "month_start":   m_start.isoformat(),
+                "month_label":   f"{VN_MONTHS[m_start.month]} {m_start.year}",
+                "month_start":   effective_start.isoformat(),
                 "days_in_month": days_in_month,
                 "days_logged":   len(days_with_meals),
                 "total_kcal":    round(month_kcal, 1),
@@ -359,9 +328,12 @@ class DiaryRepository:
                 "days":          day_cells,
             })
 
+            m_start = m_end_excl   # advance to next month
+
         return {
             "user_id":             user_id,
-            "months":              months,
+            "start_date":          start.isoformat(),
+            "end_date":            end.isoformat(),
             "streak_days":         summary["streak_days"],
             "total_meals_logged":  summary["total_meals_logged"],
             "avg_daily_kcal":      summary["avg_daily_kcal"],
@@ -370,4 +342,3 @@ class DiaryRepository:
             "avg_daily_carb_g":    summary["avg_daily_carb_g"],
             "data":                months_list,
         }
-
