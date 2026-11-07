@@ -348,34 +348,22 @@ class UserProfileRepository:
         self,
         user_id: int,
         *,
-        weeks: int = 4,
-        reference_date: date | None = None,
+        start: date,
+        end: date,    # inclusive
     ) -> list[dict[str, Any]]:
-        """Aggregate daily meal_logs into weekly buckets.
+        """Aggregate daily meal_logs into weekly buckets for [start, end].
 
-        Args:
-            user_id: ID of the requesting user.
-            weeks: How many past weeks to return (max 52).
-            reference_date: Anchor date; defaults to today (UTC+7).
+        Weeks are Mon-Sun (ISO). Partial weeks at range boundaries are included.
+        Each week shows totals even when days_logged == 0 (all zeros).
 
-        Returns:
-            List of weekly summary dicts, newest week first.
+        Returns list of weekly summary dicts ordered oldest→newest.
         """
         self.initialize_schema()
-        weeks = min(max(weeks, 1), 52)
-        ref = reference_date or date.today()
-
-        # Align to the start of the current week (Monday)
-        week_start = ref - timedelta(days=ref.weekday())
-        # We want 'weeks' full weeks ending *before* current week
-        # plus the current (possibly partial) week as week index 0.
-        period_start = week_start - timedelta(weeks=weeks - 1)
-
-        start_dt = datetime.combine(period_start, time.min)
-        end_dt = datetime.combine(week_start + timedelta(days=7), time.min)
+        end_excl = end + timedelta(days=1)
+        start_dt = datetime.combine(start, time.min)
+        end_dt = datetime.combine(end_excl, time.min)
 
         with self.database.connection() as conn, _dict_cursor(conn) as cur:
-            # Fetch target_calories for user
             cur.execute("SELECT target_calories FROM users WHERE id = %s", (user_id,))
             user_row = cur.fetchone()
             if user_row is None:
@@ -390,7 +378,6 @@ class UserProfileRepository:
                     DATE_TRUNC('week', consumed_at)::date  AS week_start,
                     COUNT(*)                               AS meal_count,
                     ROUND(SUM(total_calories)::numeric, 1) AS total_calories,
-                    ROUND(AVG(total_calories)::numeric, 1) AS avg_calories_per_meal,
                     ROUND(SUM(COALESCE(protein_g, 0))::numeric, 1) AS total_protein_g,
                     ROUND(SUM(COALESCE(fat_g,     0))::numeric, 1) AS total_fat_g,
                     ROUND(SUM(COALESCE(carb_g,    0))::numeric, 1) AS total_carb_g,
@@ -400,18 +387,22 @@ class UserProfileRepository:
                   AND consumed_at >= %s
                   AND consumed_at <  %s
                 GROUP BY week_start
-                ORDER BY week_start DESC
+                ORDER BY week_start
                 """,
                 (user_id, start_dt, end_dt),
             )
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = {r["week_start"]: dict(r) for r in cur.fetchall()}
 
-        # Build a full calendar of weeks so gaps show as zeros
+        # Walk Mon-aligned weeks from start to end
         results: list[dict[str, Any]] = []
-        for i in range(weeks - 1, -1, -1):
-            w_start = week_start - timedelta(weeks=i)
-            w_end = w_start + timedelta(days=6)
-            match = next((r for r in rows if r["week_start"] == w_start), None)
+        week_monday = start - timedelta(days=start.weekday())
+        cursor = week_monday
+        while cursor <= end:
+            w_start = cursor
+            w_end = cursor + timedelta(days=6)
+            effective_start = max(w_start, start)
+            effective_end = min(w_end, end)
+            match = rows.get(w_start)
 
             week_total_kcal = float(match["total_calories"]) if match else 0.0
             days = int(match["days_logged"]) if match else 0
@@ -423,23 +414,25 @@ class UserProfileRepository:
 
             results.append(
                 {
-                    "week_label": f"{w_start.isoformat()} / {w_end.isoformat()}",
-                    "week_start": w_start.isoformat(),
-                    "week_end": w_end.isoformat(),
-                    "meal_count": int(match["meal_count"]) if match else 0,
-                    "days_logged": days,
-                    "total_calories": week_total_kcal,
+                    "week_label": (
+                        f"{effective_start.strftime('%d/%m')} "
+                        f"– {effective_end.strftime('%d/%m/%Y')}"
+                    ),
+                    "week_start": effective_start.isoformat(),
+                    "week_end":   effective_end.isoformat(),
+                    "meal_count":       int(match["meal_count"]) if match else 0,
+                    "days_logged":      days,
+                    "total_calories":   week_total_kcal,
                     "avg_daily_calories": avg_daily,
                     "target_weekly_kcal": target_weekly,
-                    "adherence_pct": adherence_pct,
-                    "total_protein_g": float(match["total_protein_g"]) if match else 0.0,
-                    "total_fat_g": float(match["total_fat_g"]) if match else 0.0,
-                    "total_carb_g": float(match["total_carb_g"]) if match else 0.0,
+                    "adherence_pct":    adherence_pct,
+                    "total_protein_g":  float(match["total_protein_g"]) if match else 0.0,
+                    "total_fat_g":      float(match["total_fat_g"]) if match else 0.0,
+                    "total_carb_g":     float(match["total_carb_g"]) if match else 0.0,
                 }
             )
+            cursor += timedelta(weeks=1)
 
-        # Newest week first
-        results.reverse()
         return results
 
     # ------------------------------------------------------------------
@@ -450,40 +443,20 @@ class UserProfileRepository:
         self,
         user_id: int,
         *,
-        months: int = 3,
-        reference_date: date | None = None,
+        start: date,
+        end: date,    # inclusive
     ) -> list[dict[str, Any]]:
-        """Aggregate daily meal_logs into monthly buckets.
+        """Aggregate daily meal_logs into monthly buckets for [start, end].
 
-        Args:
-            user_id: ID of the requesting user.
-            months: How many past months to return (max 24).
-            reference_date: Anchor date; defaults to today.
+        Partial months at range boundaries are included.
+        Each month shows totals even when days_logged == 0 (all zeros).
 
-        Returns:
-            List of monthly summary dicts, newest month first.
+        Returns list of monthly summary dicts ordered oldest→newest.
         """
         self.initialize_schema()
-        months = min(max(months, 1), 24)
-        ref = reference_date or date.today()
-
-        # Determine the start of the period
-        # Go back (months - 1) full months from the current month
-        current_month_start = ref.replace(day=1)
-        period_start_year = current_month_start.year
-        period_start_month = current_month_start.month - (months - 1)
-        while period_start_month <= 0:
-            period_start_month += 12
-            period_start_year -= 1
-        period_start = date(period_start_year, period_start_month, 1)
-
-        # End: first day of next month after ref
-        next_month = current_month_start.month % 12 + 1
-        next_month_year = current_month_start.year + (1 if current_month_start.month == 12 else 0)
-        period_end = date(next_month_year, next_month, 1)
-
-        start_dt = datetime.combine(period_start, time.min)
-        end_dt = datetime.combine(period_end, time.min)
+        end_excl = end + timedelta(days=1)
+        start_dt = datetime.combine(start, time.min)
+        end_dt = datetime.combine(end_excl, time.min)
 
         with self.database.connection() as conn, _dict_cursor(conn) as cur:
             cur.execute("SELECT target_calories FROM users WHERE id = %s", (user_id,))
@@ -500,7 +473,6 @@ class UserProfileRepository:
                     DATE_TRUNC('month', consumed_at)::date AS month_start,
                     COUNT(*)                               AS meal_count,
                     ROUND(SUM(total_calories)::numeric, 1) AS total_calories,
-                    ROUND(AVG(total_calories)::numeric, 1) AS avg_calories_per_meal,
                     ROUND(SUM(COALESCE(protein_g, 0))::numeric, 1) AS total_protein_g,
                     ROUND(SUM(COALESCE(fat_g,     0))::numeric, 1) AS total_fat_g,
                     ROUND(SUM(COALESCE(carb_g,    0))::numeric, 1) AS total_carb_g,
@@ -510,32 +482,26 @@ class UserProfileRepository:
                   AND consumed_at >= %s
                   AND consumed_at <  %s
                 GROUP BY month_start
-                ORDER BY month_start DESC
+                ORDER BY month_start
                 """,
                 (user_id, start_dt, end_dt),
             )
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = {r["month_start"]: dict(r) for r in cur.fetchall()}
 
-        # Build full calendar of months
+        # Walk month-by-month from start's month to end's month
         results: list[dict[str, Any]] = []
-        for i in range(months - 1, -1, -1):
-            m_year = current_month_start.year
-            m_month = current_month_start.month - i
-            while m_month <= 0:
-                m_month += 12
-                m_year -= 1
-            m_start = date(m_year, m_month, 1)
-            match = next((r for r in rows if r["month_start"] == m_start), None)
+        m_start = start.replace(day=1)
+        while m_start <= end:
+            nm = m_start.month % 12 + 1
+            ny = m_start.year + (1 if m_start.month == 12 else 0)
+            m_end_excl = date(ny, nm, 1)
+            days_in_month = (m_end_excl - m_start).days
+            effective_start = max(m_start, start)
+            effective_end = min(m_end_excl - timedelta(days=1), end)
+            match = rows.get(m_start)
 
             month_total_kcal = float(match["total_calories"]) if match else 0.0
             days = int(match["days_logged"]) if match else 0
-
-            # Days in month
-            if m_month == 12:
-                days_in_month = (date(m_year + 1, 1, 1) - m_start).days
-            else:
-                days_in_month = (date(m_year, m_month + 1, 1) - m_start).days
-
             avg_daily = round(month_total_kcal / days, 1) if days else 0.0
             target_monthly = round(target_kcal * days_in_month, 1) if target_kcal else None
             adherence_pct: float | None = None
@@ -544,22 +510,22 @@ class UserProfileRepository:
 
             results.append(
                 {
-                    "month_label": m_start.strftime("%Y-%m"),
-                    "month_start": m_start.isoformat(),
-                    "days_in_month": days_in_month,
-                    "meal_count": int(match["meal_count"]) if match else 0,
-                    "days_logged": days,
+                    "month_label":    effective_start.strftime("%Y-%m"),
+                    "month_start":    effective_start.isoformat(),
+                    "days_in_month":  days_in_month,
+                    "meal_count":     int(match["meal_count"]) if match else 0,
+                    "days_logged":    days,
                     "total_calories": month_total_kcal,
                     "avg_daily_calories": avg_daily,
                     "target_monthly_kcal": target_monthly,
-                    "adherence_pct": adherence_pct,
+                    "adherence_pct":  adherence_pct,
                     "total_protein_g": float(match["total_protein_g"]) if match else 0.0,
-                    "total_fat_g": float(match["total_fat_g"]) if match else 0.0,
-                    "total_carb_g": float(match["total_carb_g"]) if match else 0.0,
+                    "total_fat_g":    float(match["total_fat_g"]) if match else 0.0,
+                    "total_carb_g":   float(match["total_carb_g"]) if match else 0.0,
                 }
             )
+            m_start = m_end_excl
 
-        results.reverse()
         return results
 
 

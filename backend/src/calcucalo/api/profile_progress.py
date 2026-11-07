@@ -185,7 +185,8 @@ class WeeklyStatItem(BaseModel):
 
 class WeeklyStatsResponse(BaseModel):
     user_id: int
-    weeks: int
+    start_date: str
+    end_date: str
     data: list[WeeklyStatItem]
 
 
@@ -206,7 +207,8 @@ class MonthlyStatItem(BaseModel):
 
 class MonthlyStatsResponse(BaseModel):
     user_id: int
-    months: int
+    start_date: str
+    end_date: str
     data: list[MonthlyStatItem]
 
 
@@ -428,25 +430,36 @@ def weight_history(
     response_model=WeeklyStatsResponse,
     summary="Weekly calorie and macro progress stats",
     description=(
-        "Aggregate meal_logs into weekly buckets. Returns up to 52 weeks. "
+        "Aggregate meal_logs into weekly buckets for the given date range. "
         "Each bucket includes total/average calories, macro totals, days logged, "
-        "and adherence percentage vs. the user's saved calorie target."
+        "and adherence percentage vs. the user's saved calorie target. "
+        "Weeks are Mon-Sun (ISO). Partial weeks at range boundaries are included."
     ),
 )
 def weekly_progress(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
     repo: Annotated[UserProfileRepository, Depends(get_profile_repo)],
-    weeks: Annotated[int, Query(ge=1, le=52, description="Number of weeks to include")] = 4,
+    start_date: Annotated[
+        str,
+        Query(description="Start date inclusive (YYYY-MM-DD), e.g. 2026-10-27"),
+    ],
+    end_date: Annotated[
+        str,
+        Query(description="End date inclusive (YYYY-MM-DD), e.g. 2026-11-02"),
+    ],
 ) -> dict[str, Any]:
     user_id = int(current_user["id"])
+    start, end = _parse_date_range(start_date, end_date)
     today = datetime.now(BANGKOK_TIMEZONE).date()
     try:
-        data = repo.weekly_stats(user_id, weeks=weeks, reference_date=today)
+        data = repo.weekly_stats(user_id, start=start, end=end)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _db_error(exc) from exc
-    return {"user_id": user_id, "weeks": weeks, "data": data}
+    return {"user_id": user_id, "start_date": start.isoformat(), "end_date": end.isoformat(), "data": data}
 
 
 # ---------------------------------------------------------------------------
@@ -459,30 +472,72 @@ def weekly_progress(
     response_model=MonthlyStatsResponse,
     summary="Monthly calorie and macro progress stats",
     description=(
-        "Aggregate meal_logs into monthly buckets. Returns up to 24 months. "
+        "Aggregate meal_logs into monthly buckets for the given date range. "
         "Each bucket includes total/average calories, macro totals, days logged, "
-        "and adherence percentage vs. the user's saved calorie target."
+        "and adherence percentage vs. the user's saved calorie target. "
+        "Partial months at range boundaries are included."
     ),
 )
 def monthly_progress(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
     repo: Annotated[UserProfileRepository, Depends(get_profile_repo)],
-    months: Annotated[int, Query(ge=1, le=24, description="Number of months to include")] = 3,
+    start_date: Annotated[
+        str,
+        Query(description="Start date inclusive (YYYY-MM-DD), e.g. 2026-10-01"),
+    ],
+    end_date: Annotated[
+        str,
+        Query(description="End date inclusive (YYYY-MM-DD), e.g. 2026-11-07"),
+    ],
 ) -> dict[str, Any]:
     user_id = int(current_user["id"])
+    start, end = _parse_date_range(start_date, end_date)
     today = datetime.now(BANGKOK_TIMEZONE).date()
     try:
-        data = repo.monthly_stats(user_id, months=months, reference_date=today)
+        data = repo.monthly_stats(user_id, start=start, end=end)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _db_error(exc) from exc
-    return {"user_id": user_id, "months": months, "data": data}
+    return {"user_id": user_id, "start_date": start.isoformat(), "end_date": end.isoformat(), "data": data}
 
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helpers
 # ---------------------------------------------------------------------------
+
+_MAX_PROGRESS_DAYS = 366
+
+
+def _parse_date_range(start_str: str, end_str: str) -> tuple[date, date]:
+    """Parse, validate and return (start, end) inclusive date pair."""
+    try:
+        start = date.fromisoformat(start_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"'start_date' must be YYYY-MM-DD, got '{start_str}'",
+        )
+    try:
+        end = date.fromisoformat(end_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"'end_date' must be YYYY-MM-DD, got '{end_str}'",
+        )
+    if end < start:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="'end_date' must be >= 'start_date'.",
+        )
+    if (end - start).days >= _MAX_PROGRESS_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Date range must not exceed {_MAX_PROGRESS_DAYS} days.",
+        )
+    return start, end
 
 
 def _db_error(exc: Exception) -> HTTPException:
