@@ -90,6 +90,16 @@ Swagger sinh tự động tại `http://127.0.0.1:8000/docs` khi server chạy.
 | Nutrition | `POST /api/v1/nutrition/calculate` | Access token | Tính và lưu profile BMI/RMR/TDEE/mục tiêu; hỗ trợ đơn vị kg/lbs và cm/ft |
 | Meals | `POST /api/v1/meals` | Access token | Tạo meal log từ catalog món hoặc kcal/macro nhập tay |
 | Meals | `GET /api/v1/meals/daily?date=YYYY-MM-DD` | Access token | Lấy bữa ăn, tổng và phần còn lại trong một ngày |
+| Profile | `GET /api/v1/profile` | Access token | Đọc thông tin hồ sơ user |
+| Profile | `PATCH /api/v1/profile` | Access token | Cập nhật hồ sơ (cân nặng, chiều cao, goal, activity...) |
+| Profile | `POST /api/v1/profile/weight` | Access token | Ghi nhật ký cân nặng mới |
+| Profile | `GET /api/v1/profile/weight/history` | Access token | Lịch sử cân nặng |
+| Progress | `GET /api/v1/progress/weekly?start_date=&end_date=` | Access token | Thống kê calo & macro theo tuần trong khoảng ngày |
+| Progress | `GET /api/v1/progress/monthly?start_date=&end_date=` | Access token | Thống kê calo & macro theo tháng trong khoảng ngày |
+| Diary | `GET /api/v1/diary/weekly?start_date=&end_date=` | Access token | Lưới ảnh nhật ký nhóm theo tuần (tab Tuần) |
+| Diary | `GET /api/v1/diary/monthly?start_date=&end_date=` | Access token | Lưới ảnh nhật ký nhóm theo tháng (tab Tháng) |
+| Ingredients | `GET /api/v1/ingredients/search?q=` | Access token | Tìm kiếm thành phần dinh dưỡng theo tên |
+| Upload | `POST /api/v1/upload/image` | Access token | Upload ảnh lên Cloudinary, trả URL |
 
 `/food/analyze` giới hạn ảnh ở 15 MB. Các endpoint nutrition/meals dùng header:
 
