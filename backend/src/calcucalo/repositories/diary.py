@@ -52,20 +52,13 @@ class DiaryRepository:
                         ROUND(SUM(COALESCE(fat_g,     0))::numeric, 1)          AS total_fat_g,
                         ROUND(SUM(COALESCE(carb_g,    0))::numeric, 1)          AS total_carb_g,
                         -- Most recent non-null image for this day
-                        (
-                            SELECT ml2.image_url
-                            FROM   meal_logs ml2
-                            WHERE  ml2.user_id      = ml.user_id
-                              AND  ml2.consumed_at::date = ml.consumed_at::date
-                              AND  ml2.image_url    IS NOT NULL
-                            ORDER  BY ml2.consumed_at DESC
-                            LIMIT  1
-                        ) AS representative_image_url
+                        (ARRAY_AGG(image_url ORDER BY consumed_at DESC)
+                        FILTER (WHERE image_url IS NOT NULL))[1]     AS representative_image_url
                     FROM meal_logs ml
                     WHERE user_id    = %s
                       AND consumed_at >= %s
                       AND consumed_at <  %s
-                    GROUP BY consumed_at::date, ml.user_id
+                    GROUP BY consumed_at::date
                     ORDER BY day
                     """,
                     (user_id, start_dt, end_dt),
