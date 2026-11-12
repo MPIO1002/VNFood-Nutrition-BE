@@ -35,8 +35,6 @@ const elements = {
   foodImage: document.querySelector("#food-image"),
   fileName: document.querySelector("#file-name"),
   containerType: document.querySelector("#container-type"),
-  roundFields: document.querySelector("#round-fields"),
-  boxFields: document.querySelector("#box-fields"),
   previewImage: document.querySelector("#preview-image"),
   overlayImage: document.querySelector("#overlay-image"),
   resultPreview: document.querySelector("#result-preview"),
@@ -327,12 +325,6 @@ document.querySelector("#clear-session").addEventListener("click", () => {
   showToast("Đã xóa token khỏi tab hiện tại");
 });
 
-elements.containerType.addEventListener("change", () => {
-  const isBox = elements.containerType.value === "hop";
-  elements.roundFields.classList.toggle("is-hidden", isBox);
-  elements.boxFields.classList.toggle("is-hidden", !isBox);
-});
-
 elements.foodImage.addEventListener("change", () => {
   const [file] = elements.foodImage.files;
   if (!file) return;
@@ -355,22 +347,9 @@ elements.analyzeForm.addEventListener("submit", async (event) => {
 
       const form = new FormData();
       const values = new FormData(elements.analyzeForm);
-      const containerType = String(values.get("container_type"));
       form.append("image", file);
-      form.append("container_type", containerType);
+      form.append("container_type", String(values.get("container_type")));
       form.append("response_format", String(values.get("response_format")));
-
-      if (containerType === "hop") {
-        form.append("container_length_cm", String(values.get("container_length_cm")));
-        form.append("container_width_cm", String(values.get("container_width_cm")));
-      } else {
-        const cmPerPixel = String(values.get("cm_per_pixel") || "").trim();
-        if (cmPerPixel) {
-          form.append("cm_per_pixel", cmPerPixel);
-        } else {
-          form.append("container_diameter_cm", String(values.get("container_diameter_cm")));
-        }
-      }
 
       elements.analysisStatus.textContent = "Đang chạy pipeline…";
       const payload = await apiRequest("/api/v1/food/analyze", { method: "POST", body: form });

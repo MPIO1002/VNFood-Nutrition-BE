@@ -51,8 +51,18 @@ class DiaryRepository:
                         ROUND(SUM(COALESCE(protein_g, 0))::numeric, 1)          AS total_protein_g,
                         ROUND(SUM(COALESCE(fat_g,     0))::numeric, 1)          AS total_fat_g,
                         ROUND(SUM(COALESCE(carb_g,    0))::numeric, 1)          AS total_carb_g,
-                        -- Most recent non-null image for this day
-                        (ARRAY_AGG(image_url ORDER BY consumed_at DESC)
+                        -- Prefer images from the latest meal type; use time for ties.
+                        (ARRAY_AGG(image_url ORDER BY
+                            CASE LOWER(BTRIM(ml.meal_type))
+                                WHEN 'breakfast' THEN 1
+                                WHEN 'lunch' THEN 2
+                                WHEN 'snack' THEN 3
+                                WHEN 'dinner' THEN 4
+                                ELSE 0
+                            END DESC,
+                            consumed_at DESC,
+                            ml.id DESC
+                        )
                         FILTER (WHERE image_url IS NOT NULL))[1]     AS representative_image_url
                     FROM meal_logs ml
                     WHERE user_id    = %s

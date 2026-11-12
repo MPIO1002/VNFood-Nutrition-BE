@@ -26,6 +26,10 @@ liquid_classes:
 - Bun cha ca
 - Chao long
 - Sup cua
+- Chao vit
+- Canh bi do
+- Canh kho hoa
+- Canh khoai tim
 foods:
   Banh canh:
     default_mass_g: 550
@@ -106,3 +110,80 @@ foods:
     expected_fill_ratio: 0.55
   Trung:
     default_mass_g: 55
+  # --- 20 món bổ sung cho bộ 88 lớp (VietFood88) ---
+  # default_mass_g lấy theo tổng khối lượng thành phần của công thức trong DB
+  # (bảng dish_ingredients) để prior và DB không lệch nhau khi mất kết nối DB.
+  Banh bao:
+    default_mass_g: 100
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Banh bo:
+    default_mass_g: 100
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Banh bot loc:
+    default_mass_g: 140
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Banh da lon:
+    default_mass_g: 115
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Banh gio:
+    default_mass_g: 150
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Banh hoi:
+    default_mass_g: 200
+    relative_uncertainty: 0.4
+  Banh tieu:
+    default_mass_g: 75
+    relative_uncertainty: 0.35
+    expected_fill_ratio: 0.6
+  Bo ne:
+    default_mass_g: 200
+    relative_uncertainty: 0.45
+    expected_fill_ratio: 0.65
+  Bun thit nuong:
+    default_mass_g: 290
+    relative_uncertainty: 0.4
+    expected_fill_ratio: 0.75
+  Ca kho to:
+    default_mass_g: 180
+    relative_uncertainty: 0.45
+  Canh bi do:
+    default_mass_g: 160
+    relative_uncertainty: 0.5
+    expected_fill_ratio: 0.8
+  Canh kho hoa:
+    default_mass_g: 175
+    relative_uncertainty: 0.5
+    expected_fill_ratio: 0.8
+  Canh khoai tim:
+    default_mass_g: 140
+    relative_uncertainty: 0.5
+    expected_fill_ratio: 0.8
+  Cha com:
+    default_mass_g: 90
+    relative_uncertainty: 0.35
+  Chao vit:
+    default_mass_g: 160
+    relative_uncertainty: 0.5
+    expected_fill_ratio: 0.8
+  Com ga xoi mo:
+    default_mass_g: 225
+    expected_fill_ratio: 0.65
+  Mam chung:
+    default_mass_g: 160
+    relative_uncertainty: 0.45
+  Nem chua:
+    default_mass_g: 80
+    relative_uncertainty: 0.35
+  Rau muong xao:
+    default_mass_g: 225
+    relative_uncertainty: 0.45
+    expected_fill_ratio: 0.6
+  Tau hu nhoi thit:
+    default_mass_g: 210
+    relative_uncertainty: 0.45
+    expected_fill_ratio: 0.65

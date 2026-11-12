@@ -10,7 +10,7 @@ PRIORS = Path(__file__).resolve().parents[1] / "configs" / "portion_priors.yaml"
 
 def test_uncalibrated_image_without_container_uses_serving_prior() -> None:
     estimator = PortionEstimator(PRIORS)
-    result = estimator.estimate("Com", np.ones((10, 10), dtype=bool), None)
+    result = estimator.estimate("Com", np.ones((10, 10), dtype=bool))
 
     assert result.method == "serving_mass_prior"
     # "Com" has default_mass_g = 300 in portion_priors.yaml
@@ -90,5 +90,5 @@ def test_container_scale_factors_for_hop_and_chen() -> None:
 
 def test_model_label_with_english_suffix_matches_vietnamese_prior() -> None:
     estimator = PortionEstimator(PRIORS)
-    result = estimator.estimate("Com (Rice)", np.ones((10, 10), dtype=bool), None)
+    result = estimator.estimate("Com (Rice)", np.ones((10, 10), dtype=bool))
     assert result.weight_g == 300.0

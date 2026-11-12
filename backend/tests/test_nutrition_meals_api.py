@@ -44,6 +44,8 @@ class FakeNutritionTrackingRepository:
             "carb_g": 85.0,
             "calorie_source": "manual",
             "catalog_calories_per_serving": None,
+            "estimated_portion_g": None,
+            "base_portion_g": None,
             "image_url": None,
             "consumed_at": datetime(2026, 10, 21, 12, 30),
             "created_at": datetime(2026, 10, 21, 12, 31),
@@ -55,13 +57,19 @@ class FakeNutritionTrackingRepository:
         self.profile.update(values)
 
     def create_meal_log(self, **values: Any) -> dict[str, Any]:
+        portion_g = values.get("estimated_portion_g")
+        base_portion_g = None
+        if portion_g is not None:
+            base_portion_g = 100.0
+            values["quantity"] = round(portion_g / base_portion_g, 4)
+        quantity = values["quantity"]
         if values["total_calories"] is None:
-            total_calories = round(620.0 * values["quantity"], 1)
+            total_calories = round(620.0 * quantity, 1)
             calorie_source = "dish_catalog"
             catalog_calories = 620.0
-            protein_g = round(25.0 * values["quantity"], 1)
-            fat_g = round(15.0 * values["quantity"], 1)
-            carb_g = round(85.0 * values["quantity"], 1)
+            protein_g = round(25.0 * quantity, 1)
+            fat_g = round(15.0 * quantity, 1)
+            carb_g = round(85.0 * quantity, 1)
         else:
             total_calories = values["total_calories"]
             calorie_source = "manual"
@@ -80,6 +88,8 @@ class FakeNutritionTrackingRepository:
             "carb_g": carb_g,
             "calorie_source": calorie_source,
             "catalog_calories_per_serving": catalog_calories,
+            "estimated_portion_g": portion_g,
+            "base_portion_g": base_portion_g,
         }
 
     def daily_meals(
@@ -288,6 +298,55 @@ def test_create_meal_can_calculate_calories_from_dish_catalog() -> None:
     assert response.json()["calorie_source"] == "dish_catalog"
     assert response.json()["catalog_calories_per_serving"] == 620.0
     assert response.json()["protein_g"] == 37.5
+
+
+def test_create_catalog_meal_from_estimated_portion() -> None:
+    repository = FakeNutritionTrackingRepository()
+    client = _client_with_overrides(repository)
+    try:
+        response = client.post(
+            "/api/v1/meals",
+            json={"dish_id": 1, "meal_type": "snack", "estimated_portion_g": 55.8},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["quantity"] == 0.558
+    assert body["estimated_portion_g"] == 55.8
+    assert body["base_portion_g"] == 100.0
+    assert body["total_calories"] == 346.0
+    assert body["protein_g"] == 14.0
+    assert body["calorie_source"] == "dish_catalog"
+
+
+def test_estimated_portion_requires_dish_id() -> None:
+    repository = FakeNutritionTrackingRepository()
+    client = _client_with_overrides(repository)
+    try:
+        response = client.post(
+            "/api/v1/meals",
+            json={"meal_type": "snack", "estimated_portion_g": 50},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+
+
+def test_estimated_portion_must_be_positive() -> None:
+    repository = FakeNutritionTrackingRepository()
+    client = _client_with_overrides(repository)
+    try:
+        response = client.post(
+            "/api/v1/meals",
+            json={"dish_id": 1, "meal_type": "snack", "estimated_portion_g": 0},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
 
 
 def test_meal_requires_dish_or_manual_calories() -> None:

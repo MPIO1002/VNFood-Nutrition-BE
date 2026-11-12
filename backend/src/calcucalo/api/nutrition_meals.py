@@ -12,6 +12,7 @@ from ..core.database import get_database
 from ..repositories.nutrition_tracking import (
     DishNotFoundError,
     DishNutritionUnavailableError,
+    InvalidPortionError,
     MealCalorieLimitError,
     NutritionTrackingRepository,
     UserNotFoundError,
@@ -318,6 +319,16 @@ class MealCreateRequest(BaseModel):
     )
     image_url: str | None = Field(default=None, max_length=2048)
     consumed_at: datetime | None = None
+    estimated_portion_g: float | None = Field(
+        default=None,
+        gt=0,
+        le=100_000,
+        allow_inf_nan=False,
+        description=(
+            "Portion mass in grams from the analyze response (portion.weight_g). "
+            "When present, the server derives quantity from the dish base portion."
+        ),
+    )
 
     @field_validator("image_url")
     @classmethod
@@ -326,6 +337,8 @@ class MealCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_calorie_source(self) -> MealCreateRequest:
+        if self.estimated_portion_g is not None and self.dish_id is None:
+            raise ValueError("estimated_portion_g requires dish_id")
         if self.dish_id is None and self.total_calories is None:
             raise ValueError(
                 "Provide dish_id for catalog calories or total_calories for a manual log"
@@ -346,6 +359,8 @@ class MealResponse(BaseModel):
     carb_g: float | None = None
     calorie_source: CalorieSource
     catalog_calories_per_serving: float | None
+    estimated_portion_g: float | None = None
+    base_portion_g: float | None = None
     image_url: str | None
     consumed_at: datetime
     created_at: datetime
@@ -449,6 +464,7 @@ def create_meal(
             protein_g=request.protein_g,
             fat_g=request.fat_g,
             carb_g=request.carb_g,
+            estimated_portion_g=request.estimated_portion_g,
             image_url=request.image_url,
             consumed_at=_as_bangkok_naive(request.consumed_at),
         )
@@ -459,6 +475,10 @@ def create_meal(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     except MealCalorieLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    except InvalidPortionError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc

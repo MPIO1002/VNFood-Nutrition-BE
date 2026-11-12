@@ -200,7 +200,7 @@ POST /food/analyze (multipart image)
   -> kiểm tra ảnh/ràng buộc 15 MB
   -> detector (YOLO .pt/.onnx) tìm món ăn
   -> segmenter (mặc định GrabCut) tạo mask nếu detector chưa có mask
-  -> portion estimator dùng scale/plate/container hoặc prior
+  -> portion estimator dùng loại vật đựng (container_type) + fill ratio + prior
   -> NutritionDB đối chiếu dish/ingredients trong PostgreSQL
   -> AnalysisResult + nutrition totals + optional visual_base64 overlay
 ```
@@ -292,7 +292,7 @@ Test code nằm ở `backend/tests/`:
 
 - `test_auth.py`, `test_nutrition_meals_api.py`, `test_metabolism.py`: JWT và phần
   API dinh dưỡng/bữa ăn.
-- Các test còn lại: vision, portion, detector, calibration, dataset và evaluation.
+- Các test còn lại: vision, portion, detector, container, dataset và evaluation.
 - `scripts/smoke_test_auth.py`: E2E với DB trong `.env`; tạo user tạm rồi cleanup.
 - `scripts/smoke_test_nutrition_meals.py`: E2E register -> calculate -> create meal
   -> daily meals với DB thật; cũng dọn dữ liệu test.

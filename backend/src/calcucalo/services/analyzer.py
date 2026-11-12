@@ -3,10 +3,9 @@ from __future__ import annotations
 from ..domain.models import (
     AnalysisItem,
     AnalysisResult,
-    ScaleCalibration,
 )
 from ..repositories.nutrition import NutritionCatalog
-from .calibration import PlateScaleEstimator, manual_scale
+from .container import ContainerEstimator
 from .detector import Detector
 from .image_io import ImageInput, load_rgb_image
 from .masks import bbox_mask, mask_quality, mask_to_polygons, normalize_mask
@@ -29,17 +28,13 @@ class FoodImageAnalyzer:
         self.portion_estimator = portion_estimator
         self.nutrition_catalog = nutrition_catalog
         self.exclude_class_ids = exclude_class_ids if exclude_class_ids is not None else {27}
-        self.plate_scale_estimator = PlateScaleEstimator()
+        self.container_estimator = ContainerEstimator()
 
     def analyze(
         self,
         source: ImageInput,
         *,
-        plate_diameter_cm: float | None = None,
         container_type: str | None = None,
-        container_length_cm: float | None = None,
-        container_width_cm: float | None = None,
-        cm_per_pixel: float | None = None,
     ) -> AnalysisResult:
         image = load_rgb_image(source)
         height, width = image.shape[:2]
@@ -50,31 +45,19 @@ class FoodImageAnalyzer:
             if detection.class_id not in self.exclude_class_ids
         ]
 
-        calibration: ScaleCalibration | None = None
         warnings: list[str] = [
             recommendation
             for recommendation in image_quality["recommendations"]
             if image_quality["issues"] and recommendation
         ]
         container_area_px = None
-        if cm_per_pixel is not None:
-            calibration = manual_scale(cm_per_pixel)
-        elif plate_diameter_cm is not None:
-            calibration = self.plate_scale_estimator.estimate(image, plate_diameter_cm)
-            if calibration is None:
-                warnings.append(
-                    "Không tìm thấy đường tròn của đĩa/bát; khối lượng đang dùng khẩu phần mặc định."
-                )
-            else:
-                container_area_px = 3.141592653589793 * (calibration.reference["circle_xy_radius_px"][2]) ** 2
+        container_res = self.container_estimator.detect_container_area(image, container_type)
+        if container_res:
+            container_area_px, _, _ = container_res
         else:
-            container_res = self.plate_scale_estimator.detect_container_area(image, container_type)
-            if container_res:
-                container_area_px, _, _ = container_res
-            else:
-                warnings.append(
-                    "Không phát hiện được đồ đựng; sử dụng khẩu phần mặc định theo loại đồ đựng."
-                )
+            warnings.append(
+                "Không phát hiện được đồ đựng; sử dụng khẩu phần mặc định theo loại đồ đựng."
+            )
 
         missing = [detection for detection in detections if detection.mask is None]
         generated_masks = iter(self.segmenter.segment(image, missing)) if missing else iter(())
@@ -101,12 +84,8 @@ class FoodImageAnalyzer:
             portion = self.portion_estimator.estimate(
                 detection.label,
                 mask,
-                calibration,
                 mask_confidence=quality,
                 container_type=container_type,
-                container_diameter_cm=plate_diameter_cm,
-                container_length_cm=container_length_cm,
-                container_width_cm=container_width_cm,
                 container_area_px=container_area_px,
                 base_portion_g=base_portion_g,
             )
@@ -130,7 +109,6 @@ class FoodImageAnalyzer:
             image_width=width,
             image_height=height,
             items=items,
-            calibration=calibration,
             warnings=warnings,
             image_quality=image_quality,
         )

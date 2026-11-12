@@ -33,7 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_ROOT = PROJECT_ROOT.parent / "frontend"
 load_dotenv(PROJECT_ROOT / ".env")
 
-EXPECTED_CLASS_COUNT = 68
+EXPECTED_CLASS_COUNT = 88
 _logger = logging.getLogger(__name__)
 app = FastAPI(title="CalcuCalo Vision API", version="0.5.1")
 app.include_router(auth_router)
@@ -107,7 +107,7 @@ def _model_readiness(info: dict[str, object]) -> dict[str, object]:
     if class_count != EXPECTED_CLASS_COUNT:
         status = "class_mismatch"
         warnings.append(
-            f"Checkpoint có {class_count} lớp, trong khi pipeline VietFood67 mong đợi "
+            f"Checkpoint có {class_count} lớp, trong khi pipeline VietFood88 mong đợi "
             f"{EXPECTED_CLASS_COUNT} lớp."
         )
     else:
@@ -172,7 +172,7 @@ def get_analyzer() -> FoodImageAnalyzer:
     )
     detector = create_detector(
         model_path,
-        classes_path=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml",
+        classes_path=PROJECT_ROOT / "configs" / "vietfood88_classes.yaml",
         confidence=_env_float("CALCUCALO_CONFIDENCE", 0.38, 0.01, 1.0),
         iou=_env_float("CALCUCALO_IOU", 0.60, 0.01, 1.0),
         image_size=_env_int("CALCUCALO_IMAGE_SIZE", 640, 160, 2048),

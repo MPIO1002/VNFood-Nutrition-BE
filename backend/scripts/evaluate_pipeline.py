@@ -47,7 +47,7 @@ def main() -> int:
     parser.add_argument("--component-pass", action="store_true")
     parser.add_argument("--segmenter", choices=("sam", "grabcut", "bbox"), default="grabcut")
     parser.add_argument("--sam-model", default="sam2.1_t.pt")
-    parser.add_argument("--classes", default=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml")
+    parser.add_argument("--classes", default=PROJECT_ROOT / "configs" / "vietfood88_classes.yaml")
     parser.add_argument("--priors", default=PROJECT_ROOT / "configs" / "portion_priors.yaml")
     parser.add_argument("--catalog", default=PROJECT_ROOT / "configs" / "food_catalog.json")
     parser.add_argument("--confidence", type=float, default=0.25)
@@ -99,8 +99,7 @@ def main() -> int:
         try:
             result = analyzer.analyze(
                 image_path,
-                plate_diameter_cm=record.get("plate_diameter_cm"),
-                cm_per_pixel=record.get("cm_per_pixel"),
+                container_type=record.get("container_type"),
             )
             predicted = [item.food for item in result.items if item.food and not item.component_of]
             accumulator.add_sample(record["foods"], predicted)

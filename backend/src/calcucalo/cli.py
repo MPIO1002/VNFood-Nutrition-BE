@@ -16,7 +16,7 @@ from .services.visualize import save_overlay
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIORS = PROJECT_ROOT / "configs" / "portion_priors.yaml"
-DEFAULT_CLASSES = PROJECT_ROOT / "configs" / "vietfood67_classes.yaml"
+DEFAULT_CLASSES = PROJECT_ROOT / "configs" / "vietfood88_classes.yaml"
 DEFAULT_CATALOG = PROJECT_ROOT / "configs" / "food_catalog.json"
 
 
@@ -44,8 +44,7 @@ def run_analyze(args: argparse.Namespace) -> int:
     )
     result = analyzer.analyze(
         args.image,
-        plate_diameter_cm=args.plate_diameter_cm,
-        cm_per_pixel=args.cm_per_pixel,
+        container_type=args.container_type,
     )
     output = (
         result.to_nutrition_dict(compact=True, unwrap_single=True)
@@ -139,16 +138,18 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--iou", type=float, default=0.60)
     analyze.add_argument("--image-size", type=int, default=640)
     analyze.add_argument("--device", help="cpu, mps or CUDA index such as 0")
-    scale = analyze.add_mutually_exclusive_group()
-    scale.add_argument("--plate-diameter-cm", type=float)
-    scale.add_argument("--cm-per-pixel", type=float)
+    analyze.add_argument(
+        "--container-type",
+        choices=("chen", "to", "to_lon", "dia_nho", "dia", "dia_lon", "hop"),
+        help="Container type used to scale the portion (chen/to/dia/hop/...)",
+    )
     analyze.add_argument("--output-json")
     analyze.add_argument("--output-image")
     analyze.set_defaults(handler=run_analyze)
 
-    prepare = subparsers.add_parser("prepare-dataset", help="Validate VietFood67 and write data YAML")
+    prepare = subparsers.add_parser("prepare-dataset", help="Validate VietFood88 and write data YAML")
     prepare.add_argument("dataset_root")
-    prepare.add_argument("--output", default=str(PROJECT_ROOT / "configs" / "vietfood67.yaml"))
+    prepare.add_argument("--output", default=str(PROJECT_ROOT / "configs" / "vietfood88.yaml"))
     prepare.add_argument("--classes", default=str(DEFAULT_CLASSES))
     prepare.add_argument("--skip-validation", action="store_true")
     prepare.set_defaults(handler=run_prepare)
