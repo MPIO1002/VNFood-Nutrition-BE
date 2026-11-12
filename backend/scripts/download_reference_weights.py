@@ -43,8 +43,8 @@ def main() -> int:
         raise SystemExit("Downloaded weights failed size/SHA-256 verification")
     temporary.replace(output)
     print(output)
-    print("This public ONNX file has 58 classes (57 foods + human), not all 68 VietFood67 classes.")
-    print("Train with VietFood67 for the full class set. Check dataset/model licenses before commercial use.")
+    print("This public ONNX file has 58 classes (57 foods + human), not all 88 VietFood88 classes.")
+    print("Train with VietFood88 for the full class set. Check dataset/model licenses before commercial use.")
     return 0
 
 

@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from ..domain.models import PortionEstimate, ScaleCalibration
+from ..domain.models import PortionEstimate
 
 
 @dataclass(frozen=True)
@@ -66,29 +66,21 @@ class PortionEstimator:
         self,
         label: str,
         mask: np.ndarray,
-        calibration: ScaleCalibration | None = None,
         mask_confidence: float = 1.0,
         container_type: str | None = None,
-        container_diameter_cm: float | None = None,
-        container_length_cm: float | None = None,
-        container_width_cm: float | None = None,
-        plate_area_px: float | None = None,
         container_area_px: float | None = None,
         base_portion_g: float | None = None,
     ) -> PortionEstimate:
         prior = self.prior_for(label)
         area_px = int(np.count_nonzero(mask))
 
-        # Support container_area_px or fallback to legacy plate_area_px
-        effective_container_area = container_area_px if container_area_px is not None else plate_area_px
-
         # Base mass: prefer DB recipe base portion, fallback to class prior
         reference_mass = float(base_portion_g) if (base_portion_g is not None and base_portion_g > 0) else prior.default_mass_g
         container_scale = CONTAINER_SCALE.get(container_type, 1.0) if container_type else 1.0
         base_mass = reference_mass * container_scale
 
-        if effective_container_area and effective_container_area > 0:
-            fill_ratio = area_px / effective_container_area
+        if container_area_px and container_area_px > 0:
+            fill_ratio = area_px / container_area_px
             fill_ratio = max(0.05, min(fill_ratio, 1.5))
             portion_scale = fill_ratio / prior.expected_fill_ratio
             raw_weight = base_mass * portion_scale
@@ -106,7 +98,7 @@ class PortionEstimator:
                 "formula": "weight_g = base_recipe_mass * container_scale * (fill_ratio / expected_fill_ratio)",
                 "inputs": {
                     "mask_area_px": area_px,
-                    "container_area_px": round(effective_container_area, 2),
+                    "container_area_px": round(container_area_px, 2),
                     "base_recipe_mass_g": reference_mass,
                     "container_scale": container_scale,
                     "expected_fill_ratio": prior.expected_fill_ratio,

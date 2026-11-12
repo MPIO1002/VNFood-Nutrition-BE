@@ -1,5 +1,4 @@
-# The class order follows the VietFood67 authors' v2 FoodDetector model.
-# Class 27 is a privacy/safety helper class, not food.
+path: /kaggle/working/aug_final/vietfood88_yolo
 names:
   0: Banh canh
   1: Banh chung
@@ -69,4 +68,27 @@ names:
   65: Nom hoa chuoi
   66: Nui xao bo
   67: Sup cua
-
+  68: Banh bao
+  69: Banh bo
+  70: Banh bot loc
+  71: Banh da lon
+  72: Banh gio
+  73: Banh hoi
+  74: Banh tieu
+  75: Bo ne
+  76: Bun thit nuong
+  77: Ca kho to
+  78: Canh bi do
+  79: Canh kho hoa
+  80: Canh khoai tim
+  81: Cha com
+  82: Chao vit
+  83: Com ga xoi mo
+  84: Mam chung
+  85: Nem chua
+  86: Rau muong xao
+  87: Tau hu nhoi thit
+nc: 88
+train: train/images
+val: valid/images
+test: test/images

@@ -96,7 +96,7 @@ def main() -> int:
     parser.add_argument(
         "--classes",
         type=Path,
-        default=PROJECT_ROOT / "configs" / "vietfood67_classes.yaml",
+        default=PROJECT_ROOT / "configs" / "vietfood88_classes.yaml",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

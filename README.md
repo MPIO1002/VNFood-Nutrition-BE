@@ -129,7 +129,7 @@ Chạy các lệnh từ `backend/`:
 
 ```powershell
 python scripts/train_detector.py `
-  --data configs\vietfood67.yaml `
+  --data configs\vietfood88.yaml `
   --model models\yolo11n.pt `
   --epochs 100 `
   --batch -1 `

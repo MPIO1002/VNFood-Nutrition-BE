@@ -46,30 +46,6 @@ class Detection:
 
 
 @dataclass(frozen=True)
-class ScaleCalibration:
-    cm_per_pixel: float
-    method: str
-    confidence: float
-    reference: dict[str, Any] = field(default_factory=dict)
-    calculation: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.cm_per_pixel <= 0:
-            raise ValueError("cm_per_pixel must be positive")
-
-    def to_dict(self) -> dict[str, Any]:
-        result = {
-            "cm_per_pixel": round(self.cm_per_pixel, 6),
-            "method": self.method,
-            "confidence": round(self.confidence, 3),
-            "reference": self.reference,
-        }
-        if self.calculation:
-            result["calculation"] = self.calculation
-        return result
-
-
-@dataclass(frozen=True)
 class PortionEstimate:
     weight_g: float
     lower_g: float
@@ -129,7 +105,6 @@ class AnalysisResult:
     image_width: int
     image_height: int
     items: list[AnalysisItem]
-    calibration: ScaleCalibration | None
     warnings: list[str] = field(default_factory=list)
     image_quality: dict[str, Any] = field(default_factory=dict)
 
@@ -137,11 +112,9 @@ class AnalysisResult:
         return {
             "image": {"width": self.image_width, "height": self.image_height},
             "image_quality": self.image_quality,
-            "calibration": self.calibration.to_dict() if self.calibration else None,
             "calculation_trace": {
                 "schema_version": "1.0",
                 "measurement_status": "estimated_not_measured",
-                "metric_scale_available": self.calibration is not None,
                 "depth_measurement_available": False,
                 "notes": [
                     "A reported volume may use class-level assumed thickness.",

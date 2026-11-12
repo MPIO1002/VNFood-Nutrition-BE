@@ -36,7 +36,7 @@ def test_model_path_finds_checkpoint_inside_training_run(tmp_path, monkeypatch) 
 def test_model_readiness_flags_fractional_smoke_test() -> None:
     readiness = _model_readiness(
         {
-            "class_count": 68,
+            "class_count": 88,
             "training": {"epochs": 1, "fraction": 0.01},
             "metrics": {"metrics/mAP50(B)": 0.00019},
         }
@@ -51,7 +51,7 @@ def test_model_readiness_flags_fractional_smoke_test() -> None:
 def test_model_readiness_accepts_candidate_with_expected_classes() -> None:
     readiness = _model_readiness(
         {
-            "class_count": 68,
+            "class_count": 88,
             "training": {"epochs": 20, "fraction": 1.0},
             "metrics": {"metrics/mAP50(B)": 0.75},
         }
@@ -59,7 +59,7 @@ def test_model_readiness_accepts_candidate_with_expected_classes() -> None:
 
     assert readiness == {
         "status": "candidate",
-        "expected_class_count": 68,
+        "expected_class_count": 88,
         "warnings": [
             "Detector đạt ngưỡng candidate; vẫn cần đánh giá end-to-end khối lượng và dinh dưỡng trước production."
         ],
@@ -71,7 +71,7 @@ def test_model_readiness_accepts_candidate_with_expected_classes() -> None:
 def test_model_readiness_rejects_incomplete_training_run() -> None:
     readiness = _model_readiness(
         {
-            "class_count": 68,
+            "class_count": 88,
             "training": {
                 "epochs": 20,
                 "planned_epochs": 20,
@@ -106,7 +106,7 @@ def test_analyze_endpoint_allows_hop_without_dimensions(monkeypatch) -> None:
     class DummyAnalyzer:
         def analyze(self, *args, **kwargs):
             from calcucalo.domain.models import AnalysisResult
-            return AnalysisResult(64, 64, items=[], calibration=None, warnings=["test"])
+            return AnalysisResult(64, 64, items=[], warnings=["test"])
 
     monkeypatch.setattr(api_module, "get_analyzer", lambda: DummyAnalyzer())
 

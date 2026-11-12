@@ -62,7 +62,9 @@ Frontend dùng `date` trong mỗi phần tử để vẽ vị trí trên lưới
 
 ### 3.3 `representative_image_url`
 
-Là ảnh của bữa ăn **gần nhất trong ngày** có `image_url IS NOT NULL`.
+Là ảnh của bữa ăn có meal type được ưu tiên cao nhất trong ngày (`dinner` >
+`snack` > `lunch` > `breakfast`); với nhiều ảnh cùng loại, lấy bữa có
+`consumed_at` gần nhất. Meal type khác được ưu tiên thấp hơn các loại trên.
 Có thể là `null` nếu không có bữa ăn nào trong ngày đó có ảnh.
 
 ### 3.4 `avg_daily_kcal`

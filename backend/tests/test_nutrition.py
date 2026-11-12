@@ -12,7 +12,7 @@ from calcucalo.services.segmenter import BoundingBoxSegmenter
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "configs" / "food_catalog.json"
 PRIORS = ROOT / "configs" / "portion_priors.yaml"
-CLASSES = ROOT / "configs" / "vietfood67_classes.yaml"
+CLASSES = ROOT / "configs" / "vietfood88_classes.yaml"
 
 
 def test_catalog_json_has_no_duplicate_keys() -> None:
@@ -34,8 +34,11 @@ def test_com_tam_compact_schema_matches_requested_contract() -> None:
     assert food is not None
     assert catalog.compact(food) == {
         "food_id": "VN_COM_TAM",
+        "dish_id": None,
         "name": "Cơm tấm sườn bì chả",
         "base_portion_g": 380,
+        "estimated_portion_g": 380,
+        "suggested_quantity": 1.0,
         "components": [
             {
                 "name": "Cơm tấm",

@@ -31,9 +31,9 @@ def positive_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train, continue or fine-tune YOLO detection on VietFood67"
+        description="Train, continue or fine-tune YOLO detection on VietFood88"
     )
-    parser.add_argument("--data", required=True, help="Prepared VietFood67 data YAML")
+    parser.add_argument("--data", required=True, help="Prepared VietFood88 data YAML")
     parser.add_argument("--model", default="yolo11n.pt", help="Base .pt weights or model YAML")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--image-size", type=int, default=640)
@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-epochs", type=positive_float, help="Override warmup epochs")
     parser.add_argument("--save-period", type=int, default=1)
     parser.add_argument("--project", default="runs/detect")
-    parser.add_argument("--name", default="vietfood67_yolo11n")
+    parser.add_argument("--name", default="vietfood88_yolo11n")
     parser.add_argument("--exist-ok", action="store_true")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

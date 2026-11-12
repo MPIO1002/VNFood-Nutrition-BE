@@ -3,11 +3,9 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ..domain.models import ScaleCalibration
 
-
-class PlateScaleEstimator:
-    """Estimate metric scale from a near-circular plate of known diameter."""
+class ContainerEstimator:
+    """Locate the plate/bowl/box so portion can be estimated from its fill ratio."""
 
 
     def _detect_best_circle(self, image_rgb: np.ndarray) -> tuple[tuple[float, float, float], float] | None:
@@ -116,57 +114,3 @@ class PlateScaleEstimator:
                 (_, _, w, h), conf = box_res
                 return float(w * h), "rectangle", conf
             return None
-
-    def estimate(self, image_rgb: np.ndarray, plate_diameter_cm: float) -> ScaleCalibration | None:
-        if plate_diameter_cm <= 0:
-            raise ValueError("plate_diameter_cm must be positive")
-            
-        result = self._detect_best_circle(image_rgb)
-        if result is None:
-            return None
-            
-        (x, y, radius), confidence = result
-        diameter_px = 2.0 * radius
-        return ScaleCalibration(
-            cm_per_pixel=plate_diameter_cm / diameter_px,
-            method="detected_plate",
-            confidence=confidence,
-            reference={
-                "plate_diameter_cm": round(plate_diameter_cm, 2),
-                "circle_xy_radius_px": [round(x, 1), round(y, 1), round(radius, 1)],
-            },
-            calculation={
-                "model": "known_plate_diameter",
-                "formula": "cm_per_pixel = plate_diameter_cm / plate_diameter_px",
-                "inputs": {
-                    "plate_diameter_cm": round(plate_diameter_cm, 4),
-                    "plate_radius_px": round(radius, 4),
-                    "plate_diameter_px": round(diameter_px, 4),
-                },
-                "outputs": {
-                    "cm_per_pixel": round(plate_diameter_cm / diameter_px, 8),
-                },
-                "limitations": [
-                    "The plate is assumed to be circular and photographed near top-down.",
-                    "No perspective rectification is applied to an elliptical plate.",
-                ],
-            },
-        )
-
-
-def manual_scale(cm_per_pixel: float) -> ScaleCalibration:
-    return ScaleCalibration(
-        cm_per_pixel=cm_per_pixel,
-        method="manual_scale",
-        confidence=0.95,
-        reference={"provided_by_client": True},
-        calculation={
-            "model": "client_provided_scale",
-            "formula": "cm_per_pixel = client_provided_value",
-            "inputs": {"client_provided_cm_per_pixel": round(cm_per_pixel, 8)},
-            "outputs": {"cm_per_pixel": round(cm_per_pixel, 8)},
-            "limitations": [
-                "The caller is responsible for camera calibration and perspective correction."
-            ],
-        },
-    )

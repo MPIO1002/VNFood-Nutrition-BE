@@ -29,10 +29,13 @@ ghi hoặc đọc nhật ký của user khác.
 - `backend/src/calcucalo/api/nutrition_meals.py`: schema request/response và router.
 - `backend/src/calcucalo/services/metabolism.py`: công thức và các quy tắc an toàn.
 - `backend/src/calcucalo/repositories/nutrition_tracking.py`: truy vấn PostgreSQL.
+- `backend/src/calcucalo/domain/dish_nutrition.py`: phép scale khẩu phần dùng chung cho
+  analyze và create meal (một nguồn tính duy nhất).
 - `backend/migrations/0004_nutrition_meal_apis.sql`: bảng/index/constraint meal log.
 - `backend/migrations/0005_harden_nutrition_calculations.sql`: trường phân biệt giới
   tính dùng cho công thức và nguồn kcal của meal log.
 - `backend/tests/test_metabolism.py`: test công thức, ngưỡng BMI và biên an toàn.
+- `backend/tests/test_dish_nutrition.py`: test phép scale khẩu phần dùng chung.
 - `backend/tests/test_nutrition_meals_api.py`: test contract API.
 - `backend/scripts/smoke_test_nutrition_meals.py`: test JWT + API + Neon thật và tự cleanup.
 
@@ -326,9 +329,72 @@ Ví dụ lỗi do giảm cân quá mức an toàn:
 
 ## 5. API tạo Meal Log
 
-### Chế độ catalog — backend tự tính kcal và macros
+Có ba cách khai báo bữa ăn. Với luồng **scan ảnh**, luôn dùng **chế độ khẩu phần
+(portion)** để kcal hiển thị và kcal lưu xuống khớp nhau tuyệt đối.
 
-Không gửi `total_calories`:
+### 5.1 Chế độ khẩu phần — khuyến nghị cho kết quả `POST /food/analyze`
+
+Gửi khối lượng thực tế đã ước lượng, **không gửi calo**:
+
+```json
+{
+  "dish_id": 7,
+  "meal_type": "snack",
+  "estimated_portion_g": 55.8,
+  "consumed_at": "2026-11-12T12:31:00+07:00"
+}
+```
+
+Backend tự quy đổi ra số khẩu phần rồi tính calo + macro từ cùng một phép scale:
+
+```text
+quantity = round(estimated_portion_g / base_portion_g, 4)
+base_portion_g = SUM(dish_ingredients.quantity)          -- khẩu phần chuẩn trong DB
+
+total_calories = tổng calo của từng nguyên liệu đã scale theo estimated_portion_g
+protein_g / fat_g / carb_g: cùng một phép scale, cùng một lần làm tròn
+```
+
+Ví dụ Bánh tráng trộn (`dish_id=7`, base 100 g, 229.4 kcal/khẩu phần):
+
+| Gửi lên | Server lưu |
+| --- | --- |
+| `estimated_portion_g=55.8` | `quantity=0.558`, `total_calories=128.0`, protein 8.9, fat 2.1, carb 18.5 |
+| `estimated_portion_g=100` | `quantity=1.0`, `total_calories=229.4`, protein 15.8, fat 3.7, carb 33.1 |
+
+Đây chính là con số `estimated_totals` mà `/food/analyze` đã trả về, nên màn hình
+scan và nhật ký không bao giờ lệch nhau.
+
+Response có `calorie_source="dish_catalog"` (calo vẫn lấy từ catalog), kèm
+`estimated_portion_g` và `base_portion_g` để hiển thị dạng gram thay vì "0.558 phần".
+
+**Lấy dữ liệu từ response analyze:**
+
+```json
+{
+  "items": [{
+    "portion": { "weight_g": 55.8 },
+    "food": {
+      "food_id": "DB_7",
+      "dish_id": 7,
+      "base_portion_g": 100,
+      "estimated_portion_g": 55.8,
+      "suggested_quantity": 0.558,
+      "estimated_totals": { "calories_kcal": 128.0, "protein_g": 8.9, "fat_g": 2.1, "carb_g": 18.5 }
+    }
+  }]
+}
+```
+
+Client chỉ cần gửi `dish_id` + `estimated_portion_g` (hoặc `suggested_quantity` vào
+`quantity` nếu không muốn dùng chế độ khẩu phần). `response_format=nutrition`
+(compact) cũng chứa `dish_id`, `estimated_portion_g`, `suggested_quantity`.
+
+Nếu món tồn tại nhưng chưa có dữ liệu nguyên liệu, API trả `422`.
+
+### 5.2 Chế độ catalog — client tự chọn số khẩu phần
+
+Không gửi `total_calories` và không gửi `estimated_portion_g`:
 
 ```json
 {
@@ -339,7 +405,8 @@ Không gửi `total_calories`:
 }
 ```
 
-Backend tính kcal và số gram protein, fat, carb một khẩu phần từ database nguyên liệu:
+Backend tính kcal và số gram protein, fat, carb theo khẩu phần chuẩn trong database
+nguyên liệu rồi nhân với `quantity`:
 
 ```text
 catalog_calories_per_serving = SUM(ingredients.calories × dish_ingredients.quantity / 100)
@@ -358,7 +425,7 @@ Response có `calorie_source="dish_catalog"`.
 Nếu món tồn tại nhưng chưa có dữ liệu nguyên liệu, API trả `422` và yêu cầu gửi
 kcal thủ công.
 
-### Chế độ thủ công
+### 5.3 Chế độ thủ công
 
 ```json
 {
@@ -375,49 +442,66 @@ kcal thủ công.
 ```
 
 Khi có `total_calories`, backend giữ đúng giá trị client cung cấp và trả
-`calorie_source="manual"`. Cách này dành cho kết quả đã được phân tích từ ảnh (AI model),
-nhãn dinh dưỡng hoặc nhập tay. Nếu gửi cả `dish_id` và `total_calories`, chế độ
-thủ công được ưu tiên. Các trường `protein_g`, `fat_g`, `carb_g` là tùy chọn; nếu bỏ trống và có `dish_id`, backend sẽ tự động lấy từ catalog.
+`calorie_source="manual"`. Cách này dành cho nhãn dinh dưỡng hoặc nhập tay.
 
-Nếu không gửi `dish_id`, bắt buộc phải gửi `total_calories`.
+> **Quan trọng:** nếu gửi `total_calories` + `dish_id` mà **bỏ trống macro**, backend
+> vẫn lấy macro từ catalog. Kcal và macro khi đó có thể lệch nhau (ví dụ 128 kcal
+> nhưng macro tương đương 229 kcal). Luồng scan không nên dùng chế độ này; hãy dùng
+> `estimated_portion_g`.
 
-### Các trường request
+Nếu không gửi `dish_id`, bắt buộc phải gửi `total_calories` (macro bỏ trống sẽ là
+`null`).
+
+### 5.4 Thứ tự ưu tiên
+
+| Client gửi | Server làm |
+| --- | --- |
+| `estimated_portion_g` | `quantity = portion_g / base_portion_g`; calo + macro theo khẩu phần; `calorie_source="dish_catalog"` |
+| `estimated_portion_g` + `total_calories` | kcal = `total_calories`; `quantity` vẫn suy ra từ gram; macro thiếu lấy theo gram |
+| chỉ `quantity` + `dish_id` | `total_calories = catalog_calories_per_serving × quantity` |
+| chỉ `total_calories` | manual, `quantity` không nhân vào kcal |
+| `estimated_portion_g` không có `dish_id` | `422` |
+
+### 5.5 Các trường request
 
 | Trường | Kiểu | Bắt buộc | Ý nghĩa |
 | --- | --- | --- | --- |
 | `dish_id` | integer/null | Có điều kiện | ID trong `dishes`; `404` nếu không tồn tại |
 | `meal_type` | string | Có | 1–50 ký tự (`breakfast`, `lunch`, `dinner`, `snack`...) |
-| `quantity` | number | Không | Số khẩu phần, mặc định `1`, `>0`, `<=100` |
+| `quantity` | number | Không | Số khẩu phần, mặc định `1`, `>0`, `<=100`. Bị ghi đè khi có `estimated_portion_g` |
+| `estimated_portion_g` | number/null | Không | Gram khẩu phần từ `portion.weight_g` của analyze; `0 < x <= 100000`; cần `dish_id` |
 | `total_calories` | number/null | Có điều kiện | Kcal tổng thủ công, `0–20000` |
-| `protein_g` | number/null | Không | Gram đạm, `0–1000`. Bỏ qua để backend tự tính theo catalog |
-| `fat_g` | number/null | Không | Gram chất béo, `0–1000`. Bỏ qua để backend tự tính theo catalog |
-| `carb_g` | number/null | Không | Gram tinh bột, `0–1000`. Bỏ qua để backend tự tính theo catalog |
+| `protein_g` | number/null | Không | Gram đạm, `0–1000`. Bỏ qua để backend tự tính |
+| `fat_g` | number/null | Không | Gram chất béo, `0–1000`. Bỏ qua để backend tự tính |
+| `carb_g` | number/null | Không | Gram tinh bột, `0–1000`. Bỏ qua để backend tự tính |
 | `image_url` | string/null | Không | Tối đa 2048 ký tự |
 | `consumed_at` | datetime/null | Không | Mặc định thời điểm hiện tại Asia/Bangkok |
 
 Datetime có timezone được đổi sang Asia/Bangkok. Datetime không timezone được
 hiểu là giờ địa phương Asia/Bangkok.
 
-### Response `201 Created`
+### 5.6 Response `201 Created`
 
 ```json
 {
   "id": 101,
   "user_id": 7,
-  "dish_id": 27,
-  "dish_name": "Cơm tấm",
-  "meal_type": "lunch",
-  "quantity": 1.5,
-  "total_calories": 930.0,
-  "protein_g": 37.5,
-  "fat_g": 22.5,
-  "carb_g": 127.5,
+  "dish_id": 7,
+  "dish_name": "Bánh tráng trộn",
+  "meal_type": "snack",
+  "quantity": 0.558,
+  "total_calories": 128.0,
+  "protein_g": 8.9,
+  "fat_g": 2.1,
+  "carb_g": 18.5,
   "calorie_source": "dish_catalog",
-  "catalog_calories_per_serving": 620.0,
+  "catalog_calories_per_serving": 229.4,
+  "estimated_portion_g": 55.8,
+  "base_portion_g": 100,
   "image_url": null,
-  "consumed_at": "2026-10-21T12:30:00",
-  "created_at": "2026-10-21T12:31:00",
-  "updated_at": "2026-10-21T12:31:00"
+  "consumed_at": "2026-11-12T12:31:00",
+  "created_at": "2026-11-12T12:31:00",
+  "updated_at": "2026-11-12T12:31:00"
 }
 ```
 
@@ -429,6 +513,9 @@ Authorization: Bearer <access_token>
 ```
 
 `date` không bắt buộc; nếu bỏ qua, backend dùng ngày hiện tại tại Asia/Bangkok (định dạng `YYYY-MM-DD`).
+Mảng `meals` được sắp xếp theo meal type từ cao đến thấp (`dinner`, `snack`,
+`lunch`, `breakfast`); các meal cùng loại giữ thứ tự `consumed_at` tăng dần.
+Meal type khác nằm sau các loại trên.
 
 ### Response `200 OK`
 
