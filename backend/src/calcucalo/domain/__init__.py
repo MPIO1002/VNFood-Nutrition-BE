@@ -6,7 +6,6 @@ from .models import (
     BoundingBox,
     Detection,
     PortionEstimate,
-    ScaleCalibration,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     "BoundingBox",
     "Detection",
     "PortionEstimate",
-    "ScaleCalibration",
 ]
