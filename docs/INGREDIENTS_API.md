@@ -58,11 +58,18 @@ GET /api/v1/ingredients/search?q=gà&limit=10
 Authorization: Bearer <access_token>
 ```
 
+Exclude specific ingredient IDs by repeating the `exclude_ids` parameter:
+
+```http
+GET /api/v1/ingredients/search?q=gà&exclude_ids=1&exclude_ids=2
+```
+
 | Param | Kiểu | Bắt buộc | Mô tả |
 | --- | --- | --- | --- |
 | `q` | string (1–200 ký tự) | Có | Từ khóa tìm kiếm tên thành phần |
 | `limit` | int (1–100) | Không | Số kết quả trả về (mặc định **20**) |
 | `offset` | int (≥ 0) | Không | Bỏ qua N kết quả đầu để phân trang (mặc định **0**) |
+| `exclude_ids` | int[] | Không | Loại trừ danh sách ID nguyên liệu |
 
 **Cơ chế tìm kiếm:** `ILIKE '%<q>%'` — tìm chuỗi con, không phân biệt hoa thường, không cần dấu đầy đủ.
 
