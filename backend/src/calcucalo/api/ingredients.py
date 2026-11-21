@@ -48,27 +48,31 @@ def _search_ingredients(
     query: str,
     limit: int,
     offset: int,
+    exclude_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Full-text iLIKE search on ingredients_name in the ingredients table."""
     db = get_database()
     pattern = f"%{query}%"
+    id_filter = " AND NOT (id = ANY(%s))" if exclude_ids else ""
+    filter_params: tuple[Any, ...] = (exclude_ids,) if exclude_ids else ()
     with db.connection() as conn:
         from psycopg2.extras import RealDictCursor
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Count total matches
             cur.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS total
                 FROM   ingredients
                 WHERE  ingredients_name ILIKE %s
+                {id_filter}
                 """,
-                (pattern,),
+                (pattern, *filter_params),
             )
             total = int((cur.fetchone() or {}).get("total", 0))
 
             # Fetch page
             cur.execute(
-                """
+                f"""
                 SELECT
                     id,
                     ingredients_name AS name,
@@ -78,10 +82,11 @@ def _search_ingredients(
                     carb              AS carb_g
                 FROM   ingredients
                 WHERE  ingredients_name ILIKE %s
+                {id_filter}
                 ORDER  BY ingredients_name
                 LIMIT  %s OFFSET %s
                 """,
-                (pattern, limit, offset),
+                (pattern, *filter_params, limit, offset),
             )
             rows = cur.fetchall()
 
@@ -135,9 +140,20 @@ def search_ingredients(
         int,
         Query(ge=0, description="Bỏ qua N kết quả đầu để phân trang (mặc định 0)"),
     ] = 0,
+    exclude_ids: Annotated[
+        list[int] | None,
+        Query(
+            description="Loại trừ danh sách ID, ví dụ: ?exclude_ids=1&exclude_ids=2"
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     try:
-        result = _search_ingredients(q.strip(), limit=limit, offset=offset)
+        result = _search_ingredients(
+            q.strip(),
+            limit=limit,
+            offset=offset,
+            exclude_ids=exclude_ids,
+        )
     except Exception as exc:
         logger.error("Ingredients search error: %s", exc, exc_info=True)
         raise HTTPException(
