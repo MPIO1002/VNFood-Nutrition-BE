@@ -35,9 +35,22 @@ class UltralyticsDetector:
             raise RuntimeError(
                 "Ultralytics is required for inference. Install with: pip install -e '.[inference]'"
             ) from exc
+        except OSError as exc:
+            raise RuntimeError(
+                "Cannot load the PyTorch .pt checkpoint because Windows blocked a PyTorch DLL "
+                "(Application Control). Use a best.onnx checkpoint or run inference outside "
+                "the restricted environment."
+            ) from exc
 
         self.model_path = str(model_path)
-        self.model = YOLO(self.model_path)
+        try:
+            self.model = YOLO(self.model_path)
+        except OSError as exc:
+            raise RuntimeError(
+                "Cannot load the PyTorch .pt checkpoint because Windows blocked a PyTorch DLL "
+                "(Application Control). Use a best.onnx checkpoint or run inference outside "
+                "the restricted environment."
+            ) from exc
         self.confidence = confidence
         self.iou = iou
         self.image_size = image_size

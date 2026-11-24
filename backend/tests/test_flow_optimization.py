@@ -131,3 +131,20 @@ def test_fill_ratio_adjusts_portion_and_nutrition():
         base_portion_g=450.0,
     )
     assert portion_half.weight_g == pytest.approx(225.0, rel=1e-1)
+
+
+@pytest.mark.parametrize("label, expected_g", [("Banh mi", 180.0), ("Banh bao", 100.0)])
+def test_containerless_food_uses_serving_prior(label: str, expected_g: float) -> None:
+    estimator = PortionEstimator(PRIORS)
+    mask = np.ones((100, 100), dtype=bool)
+
+    portion = estimator.estimate(
+        label,
+        mask,
+        container_type="dia",
+        container_area_px=None,
+    )
+
+    assert estimator.is_containerless(label)
+    assert portion.weight_g == pytest.approx(expected_g)
+    assert portion.method == "serving_mass_prior"

@@ -30,6 +30,9 @@ liquid_classes:
 - Canh bi do
 - Canh kho hoa
 - Canh khoai tim
+containerless_classes:
+- Banh mi
+- Banh bao
 foods:
   Banh canh:
     default_mass_g: 550

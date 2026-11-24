@@ -39,6 +39,9 @@ class FoodImageAnalyzer:
         image = load_rgb_image(source)
         height, width = image.shape[:2]
         image_quality = assess_image_quality(image)
+        selected_container_type = (container_type or "").strip().casefold() or None
+        container_mode = "none" if selected_container_type in {None, "none"} else "container"
+
         detections = [
             detection
             for detection in self.detector.predict(image)
@@ -51,10 +54,15 @@ class FoodImageAnalyzer:
             if image_quality["issues"] and recommendation
         ]
         container_area_px = None
-        container_res = self.container_estimator.detect_container_area(image, container_type)
-        if container_res:
-            container_area_px, _, _ = container_res
-        else:
+        if container_mode == "container":
+            container_res = self.container_estimator.detect_container_area(
+                image,
+                selected_container_type,
+            )
+            if container_res:
+                container_area_px, _, _ = container_res
+
+        if container_mode != "none" and container_area_px is None:
             warnings.append(
                 "Không phát hiện được đồ đựng; sử dụng khẩu phần mặc định theo loại đồ đựng."
             )
@@ -81,12 +89,18 @@ class FoodImageAnalyzer:
                 except (KeyError, ValueError, AttributeError, RuntimeError):
                     pass
 
+            item_container_type = selected_container_type
+            item_container_area_px = container_area_px
+            if self.portion_estimator.is_containerless(detection.label):
+                item_container_type = None
+                item_container_area_px = None
+
             portion = self.portion_estimator.estimate(
                 detection.label,
                 mask,
                 mask_confidence=quality,
-                container_type=container_type,
-                container_area_px=container_area_px,
+                container_type=item_container_type,
+                container_area_px=item_container_area_px,
                 base_portion_g=base_portion_g,
             )
             items.append(
