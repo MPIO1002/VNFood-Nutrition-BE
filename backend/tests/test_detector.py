@@ -1,6 +1,29 @@
 import numpy as np
+import sys
+import types
 
 from calcucalo.services.detector import OnnxYoloDetector, UltralyticsDetector
+
+
+def test_pt_checkpoint_reports_windows_torch_blocking(monkeypatch) -> None:
+    fake_ultralytics = types.ModuleType("ultralytics")
+
+    class BlockedYOLO:
+        def __init__(self, _model_path: str) -> None:
+            raise OSError(4551, "Application Control policy has blocked torch_python.dll")
+
+    fake_ultralytics.YOLO = BlockedYOLO
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
+
+    try:
+        UltralyticsDetector("best.pt")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for blocked PyTorch checkpoint")
+
+    assert "Application Control" in message
+    assert "best.onnx" in message
 
 
 def test_ultralytics_info_reports_incomplete_epoch_progress() -> None:

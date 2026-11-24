@@ -263,7 +263,7 @@ async def analyze_food(
         )
     except (UnidentifiedImageError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Generate visualization overlay

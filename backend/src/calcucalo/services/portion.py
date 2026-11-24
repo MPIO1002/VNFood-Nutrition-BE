@@ -42,6 +42,9 @@ class PortionEstimator:
         self.defaults: dict[str, Any] = config.get("defaults", {})
         self.foods: dict[str, dict[str, Any]] = config.get("foods", {})
         self.liquid_classes = {self._key(value) for value in config.get("liquid_classes", [])}
+        self.containerless_classes = {
+            self._key(value) for value in config.get("containerless_classes", [])
+        }
         self._food_lookup = {self._key(name): values for name, values in self.foods.items()}
 
     @staticmethod
@@ -62,6 +65,9 @@ class PortionEstimator:
             liquid=self._key(label) in self.liquid_classes,
         )
 
+    def is_containerless(self, label: str) -> bool:
+        return self._key(label) in self.containerless_classes
+
     def estimate(
         self,
         label: str,
@@ -73,6 +79,11 @@ class PortionEstimator:
     ) -> PortionEstimate:
         prior = self.prior_for(label)
         area_px = int(np.count_nonzero(mask))
+        mask_confidence = (
+            1.0
+            if mask_confidence is None
+            else float(np.clip(float(mask_confidence), 0.0, 1.0))
+        )
 
         # Base mass: prefer DB recipe base portion, fallback to class prior
         reference_mass = float(base_portion_g) if (base_portion_g is not None and base_portion_g > 0) else prior.default_mass_g
